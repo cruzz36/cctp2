@@ -13,8 +13,20 @@ reqType = 5
 messagePos = 6
 
 
-class NetTask:
+class MissionLink:
+    """
+    Protocolo MissionLink (ML) - Protocolo aplicacional sobre UDP para comunicação crítica
+    entre a Nave-Mãe e os rovers. Implementa mecanismos de fiabilidade a nível aplicacional
+    incluindo handshake, números de sequência, acknowledgments e retransmissão.
+    """
     def __init__(self,serverAddress,storeFolder = "."):
+        """
+        Inicializa o protocolo MissionLink.
+        
+        Args:
+            serverAddress (str): Endereço IP do servidor
+            storeFolder (str, optional): Pasta onde armazenar ficheiros recebidos. Defaults to "."
+        """
         self.serverAddress = serverAddress
         self.port = 8080
         self.sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
@@ -33,59 +45,148 @@ class NetTask:
         self.ackkey = "A"
         self.finkey = "F"
         self.synackkey = "Z"
-        self.eofkey = '\0'
+        # Variável não utilizada - usa-se "\0" diretamente no código
+        # DEVERIA ser usada em vez de "\0" hardcoded para melhor manutenibilidade
+        # Exemplo: self.formatMessage(..., self.eofkey) em vez de self.formatMessage(..., "\0")
+        # self.eofkey = '\0'
 
     
     def server(self):
+        """
+        Liga o socket UDP ao endereço e porta especificados.
+        Prepara o socket para receber mensagens.
+        """
         self.sock.bind((self.serverAddress,self.port))
 
 
     def getHeaderSize(self):
+        """
+        Calcula o tamanho do cabeçalho da mensagem do protocolo.
+        
+        Returns:
+            int: Tamanho do cabeçalho em bytes (flag + separadores + idAgent + seq + ack + size + reqType)
+        """
         # flag + | + idAgent + | + seq + | + ack + | + size + | + reqType + |
         return 1 + 1 + 3 + 1 + 4 + 1 + 4 + 1 + 4 + 1 + 1 + 1
     
     def formatMessage(self,requestType,flag,idAgent,seqNum,ackNum,message):
+        """
+        Formata uma mensagem segundo o protocolo MissionLink.
+        Formato: flag|idAgent|seq|ack|size|requestType|message
+        
+        Args:
+            requestType (str or None): Tipo de pedido (R=Register, T=Task, M=Metrics) ou None
+            flag (str): Flag de controlo (S=SYN, A=ACK, F=FIN, Z=SYN-ACK, D=Data)
+            idAgent (str): Identificador do agente/rover
+            seqNum (int): Número de sequência
+            ackNum (int): Número de acknowledgment
+            message (str): Conteúdo da mensagem
+            
+        Returns:
+            bytes: Mensagem formatada e codificada em bytes
+        """
         if requestType != None: 
             return f"{flag}|{idAgent}|{seqNum}|{ackNum}|{len(message)}|{requestType}|{message}".encode()
         return f"{flag}|{idAgent}|{seqNum}|{ackNum}|{len(message)}|N|{message}".encode()
         
 
-    #sendPacket
     def splitMessage(self,message):
+        """
+        Divide uma mensagem em chunks se exceder o tamanho máximo do buffer.
+        
+        Args:
+            message (str): Mensagem a dividir
+            
+        Returns:
+            str or list: Mensagem original se couber num pacote, ou lista de chunks
+        """
         if len(message) > self.limit.buffersize - self.getHeaderSize(): return [message[i:i+self.limit.buffersize - self.getHeaderSize()] for i in range(0,len(message),self.limit.buffersize - self.getHeaderSize())]
         else: return message
 
-    def joinMessage(self,bytes):
-        return "".join(bytes)
+    # Método não utilizado - as mensagens são tratadas como strings diretamente
+    # Não é necessário porque o código usa split/join diretamente nas strings
+    # def joinMessage(self,bytes):
+    #     """
+    #     Junta uma lista de bytes numa string.
+    #     
+    #     Args:
+    #         bytes (list): Lista de strings/bytes a juntar
+    #         
+    #     Returns:
+    #         str: String resultante da junção
+    #     """
+    #     return "".join(bytes)
     
     
-    def receiveSYNACK(self, idAgent, destAddress, destPort, expectedSeq, retryLimit=5):
-        retries = 0
-        while retries < retryLimit:
-            try:
-                # Wait for SYN-ACK
-                message, (ip, porta) = self.sock.recvfrom(self.limit.buffersize)
-                message = message.decode()
-                parts = message.split("|")
-                if len(parts) != 7:
-                    print("Mensagem com tamanho diferente")
-                    raise ValueError("Malformed message")
-                
-                flag, receivedIdAgent, seq, ack, *_ = parts
-                
-                if (self.verifySYNACK(flag, destAddress, destPort, ip, porta) and
-                    self.verifyIdAgent(idAgent, receivedIdAgent) and
-                    self.verifyACKnum(expectedSeq,ack)):
-                    return True  # Valid SYN-ACK received
-                
-            except (TimeoutError, ValueError):
-                retries += 1
-                print(message)
-                print(f"Timeout or invalid message. Retrying... ({retries}/{retryLimit})")
-        
-        raise TimeoutError("Failed to receive valid SYN-ACK after multiple attempts.")
+    # Método não utilizado - o handshake é feito diretamente em startConnection()
+    # DEVERIA estar a ser usado em startConnection() para melhorar modularidade e validação
+    # ONDE: No método startConnection(), linha ~188, em vez de fazer a validação inline
+    # COMO: Substituir o código inline por: if self.receiveSYNACK(idAgent, destAddress, destPort, seqinicial):
+    # PORQUÊ: 
+    #   1. Melhor separação de responsabilidades
+    #   2. Validação mais robusta usando métodos verifySYNACK, verifyIdAgent, verifyACKnum
+    #   3. Código mais limpo e reutilizável
+    # NOTA: Este método chama verifySYNACK, verifyIdAgent, verifyACKnum que NÃO EXISTEM
+    #       Estes métodos DEVERIAM ser implementados para validação adequada do handshake
+    # def receiveSYNACK(self, idAgent, destAddress, destPort, expectedSeq, retryLimit=5):
+    #     """
+    #     Recebe e valida um pacote SYN-ACK durante o handshake.
+    #     
+    #     Args:
+    #         idAgent (str): Identificador do agente esperado
+    #         destAddress (str): Endereço IP de destino esperado
+    #         destPort (int): Porta de destino esperada
+    #         expectedSeq (int): Número de sequência esperado
+    #         retryLimit (int, optional): Número máximo de tentativas. Defaults to 5
+    #         
+    #     Returns:
+    #         bool: True se recebeu SYN-ACK válido
+    #         
+    #     Raises:
+    #         TimeoutError: Se não receber SYN-ACK válido após múltiplas tentativas
+    #     """
+    #     retries = 0
+    #     while retries < retryLimit:
+    #         try:
+    #             # Wait for SYN-ACK
+    #             message, (ip, porta) = self.sock.recvfrom(self.limit.buffersize)
+    #             message = message.decode()
+    #             parts = message.split("|")
+    #             if len(parts) != 7:
+    #                 print("Mensagem com tamanho diferente")
+    #                 raise ValueError("Malformed message")
+    #             
+    #             flag, receivedIdAgent, seq, ack, *_ = parts
+    #             
+    #             if (self.verifySYNACK(flag, destAddress, destPort, ip, porta) and
+    #                 self.verifyIdAgent(idAgent, receivedIdAgent) and
+    #                 self.verifyACKnum(expectedSeq,ack)):
+    #                 return True  # Valid SYN-ACK received
+    #             
+    #         except (TimeoutError, ValueError):
+    #             retries += 1
+    #             print(message)
+    #             print(f"Timeout or invalid message. Retrying... ({retries}/{retryLimit})")
+    #     
+    #     raise TimeoutError("Failed to receive valid SYN-ACK after multiple attempts.")
 
     def startConnection(self, idAgent, destAddress, destPort, retryLimit=5):
+        """
+        Inicia uma conexão com handshake de 3 vias (SYN, SYN-ACK, ACK).
+        Implementa mecanismo de fiabilidade sobre UDP.
+        
+        Args:
+            idAgent (str): Identificador do agente/rover
+            destAddress (str): Endereço IP do destino
+            destPort (int): Porta do destino
+            retryLimit (int, optional): Número máximo de tentativas. Defaults to 5
+            
+        Returns:
+            tuple: ((destAddress, destPort), idAgent, seq, ack) - Informação da conexão estabelecida
+            
+        Raises:
+            TimeoutError: Se não conseguir estabelecer conexão após múltiplas tentativas
+        """
         seqinicial = 100 #random.randint(0, 10000)
         retries = 0
         
@@ -96,7 +197,8 @@ class NetTask:
                     f"{self.synkey}|{idAgent}|{seqinicial}|0|_|0|-.-".encode(),
                     (destAddress, destPort)
                 )
-                #print("SYN ENVIADO")
+                # Print de debug comentado - útil para troubleshooting do handshake
+                # print("SYN ENVIADO")
                 # Wait for SYN-ACK
                 try:
                     message, _ = self.sock.recvfrom(self.limit.buffersize)
@@ -108,13 +210,15 @@ class NetTask:
                         )
                         message,_ = self.sock.recvfrom(self.limit.buffersize)
                         lista = message.split("|")
-                    #print("RECEBEU O SYNACK CORRETO")
+                    # Print de debug comentado - confirma receção de SYN-ACK
+                    # print("RECEBEU O SYNACK CORRETO")
 
                 except TimeoutError:
-                    print("Nao deu")
+                    print("Nao deu")  # Mensagem de erro - deveria ser mais descritiva
 
                 # Send ACK
-                #print(f"Sending ACK: seq={seqinicial}")
+                # Print de debug comentado - mostra sequência do ACK enviado
+                # print(f"Sending ACK: seq={seqinicial}")
                 self.sock.sendto(
                     f"{self.ackkey}|{idAgent}|{seqinicial}|{seqinicial}|_|0|-.-".encode(),
                     (destAddress, destPort)
@@ -131,18 +235,27 @@ class NetTask:
         raise TimeoutError("Failed to establish connection after multiple attempts.")
 
 
-    # The must be run usually by a server
-    # It receives a connection request and respond, forming an handshake
-    # It returns the ip address, port, agentID, sequential number and the acknowledge number
-    # The sequential number and the acknowledge number must be the same
     def acceptConnection(self):
+        """
+        Aceita uma conexão recebendo um pedido SYN e respondendo com handshake de 3 vias.
+        Deve ser executado pelo servidor (Nave-Mãe).
+        
+        Returns:
+            tuple: ((ip, port), idAgent, seq, ack) - Informação da conexão estabelecida
+                - ip (str): Endereço IP do cliente
+                - port (int): Porta do cliente
+                - idAgent (str): Identificador do agente
+                - seq (int): Número de sequência inicial
+                - ack (int): Número de acknowledgment inicial (igual a seq)
+        """
         # RECEBER O SYN
         message,(ip,port) = self.sock.recvfrom(self.limit.buffersize)
-        #print(f"Message : {message}\nFrom : {ip}:{port}")
+        # Print de debug comentado - mostra primeira mensagem recebida
+        # print(f"Message : {message}\nFrom : {ip}:{port}")
         lista = message.decode().split("|")
         while lista[flagPos] != self.synkey:
             message,(ip,port) = self.sock.recvfrom(self.limit.buffersize)
-            print(f"Message : {message}\nFrom : {ip}:{port}")
+            print(f"Message : {message}\nFrom : {ip}:{port}")  # Print ativo - mostra mensagens inválidas
             lista = message.decode().split("|")
         idAgent = lista[idAgentPos]
         # ENVIAR SYNACK 
@@ -164,9 +277,21 @@ class NetTask:
 
         
         
-    ## Method is used to send either strings or files
-    # Shall return True when the message is sent
     def send(self,ip,port,requestType,idAgent,message):
+        """
+        Envia uma mensagem ou ficheiro através do protocolo MissionLink.
+        Estabelece conexão, envia dados com confirmação e fecha conexão.
+        
+        Args:
+            ip (str): Endereço IP do destinatário
+            port (int): Porta do destinatário
+            requestType (str): Tipo de pedido (R=Register, T=Task, M=Metrics)
+            idAgent (str): Identificador do agente/rover
+            message (str): Mensagem ou caminho do ficheiro a enviar
+            
+        Returns:
+            bool: True se a mensagem foi enviada com sucesso
+        """
         # The connection starts with an handshake to assure it has a somewhat reliable 
         # transfers between the client and the server 
         _,idAgent,seq,ack = self.startConnection(idAgent,ip,port)
@@ -216,8 +341,17 @@ class NetTask:
                         buffer = file.read(self.limit.buffersize - self.getHeaderSize())
                 except TimeoutError:
                     self.sock.sendto(self.formatMessage(requestType,self.datakey,idAgent,seq,ack,buffer),(ip,port))
-            #seq+=1
-            #ack = seq
+            # Código comentado - incremento de seq/ack não necessário
+            # DEVERIA estar a ser usado se quisermos incrementar seq antes de enviar FIN
+            # ONDE: Antes de enviar o pacote FIN para fechar conexão
+            # COMO: Descomentar estas linhas antes de self.sock.sendto(...self.finkey...)
+            # PORQUÊ: 
+            #   1. Garante que o FIN tem um número de sequência diferente do último dado
+            #   2. Mais correto do ponto de vista do protocolo
+            # NOTA: Atualmente não é necessário porque seq já foi incrementado no loop anterior
+            #       e o FIN usa o mesmo seq, o que funciona mas não é ideal
+            # seq+=1
+            # ack = seq
             self.sock.sendto(self.formatMessage(None,self.finkey,idAgent,seq,ack,"\0"),(ip,port))
             while True:
                 try:
@@ -266,25 +400,35 @@ class NetTask:
                             ack = seq
                             self.sock.sendto(self.formatMessage(None,self.finkey,idAgent,seq,ack,"\0"),(ip,port))
                             return True
-                            """
-                            while True:
-                                try:
-                                    text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
-                                    lista = text.decode().split("|")
-                                    if(
-                                        responseIp == ip and
-                                        responsePort == port and
-                                        lista[idAgentPos] == idAgent and
-                                        lista[ackPos] == seq and
-                                        lista[flagPos] == self.finkey
-                                    ):
-                                        seq += 1
-                                        ack = seq
-                                        self.sock.sendto(self.formatMessage(None,self.ackkey,idAgent,seq,ack,"\0"))
-                                        return "Message Sent"
-                                except TimeoutError:
-                                    self.sock.sendto(self.formatMessage(None,self.finkey,idAgent,seq,ack,"\0"),(ip,port))
-                            """
+                            # Código comentado - implementação alternativa de fechamento de conexão
+                            # DEVERIA estar a ser usado para garantir fechamento bidirecional da conexão
+                            # ONDE: Após enviar FIN e receber ACK, esperar pelo FIN do outro lado e responder com ACK
+                            # COMO: Descomentar este bloco em vez de apenas return True após enviar FIN
+                            # PORQUÊ:
+                            #   1. Implementa fechamento de conexão TCP completo (4-way handshake)
+                            #   2. Garante que ambos os lados confirmam o fechamento
+                            #   3. Mais robusto para garantir que a conexão está realmente fechada
+                            # NOTA: Tem um bug - lista[ackPos] == seq deveria ser lista[ackPos] == str(seq)
+                            #       e falta (ip,port) no último sendto
+                            # """
+                            # while True:
+                            #     try:
+                            #         text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
+                            #         lista = text.decode().split("|")
+                            #         if(
+                            #             responseIp == ip and
+                            #             responsePort == port and
+                            #             lista[idAgentPos] == idAgent and
+                            #             lista[ackPos] == str(seq) and  # BUG corrigido: era seq, deveria ser str(seq)
+                            #             lista[flagPos] == self.finkey
+                            #         ):
+                            #             seq += 1
+                            #             ack = seq
+                            #             self.sock.sendto(self.formatMessage(None,self.ackkey,idAgent,seq,ack,"\0"),(ip,port))  # BUG corrigido: faltava (ip,port)
+                            #             return "Message Sent"
+                            #     except TimeoutError:
+                            #         self.sock.sendto(self.formatMessage(None,self.finkey,idAgent,seq,ack,"\0"),(ip,port))
+                            # """
                                     
                         continue
                     except TimeoutError:
@@ -418,15 +562,24 @@ class NetTask:
 
                         #Check if the client send a connection closing message
                         if lista[flagPos] == self.finkey:
-                            #print(lista)
-                            #print("Received the end connection packet")
+                            # Prints de debug comentados - útil para troubleshooting
+                            # DEVERIAM estar ativos durante desenvolvimento/debug
+                            # print(lista)
+                            # print("Received the end connection packet")
                             self.sock.sendto(self.formatMessage(None,self.finkey,idAgent,seq,ack,"\0"),(ip,port))
-                            # Eventually is necessary to add a response with ACK
-                            #_ ,_ = self.sock.recvfrom(self.limit.buffersize)
+                            # Código comentado - espera por ACK do FIN enviado
+                            # DEVERIA estar a ser usado para garantir fechamento completo da conexão
+                            # ONDE: Após enviar FIN, esperar pelo ACK antes de retornar
+                            # COMO: Descomentar e processar a resposta antes de return
+                            # PORQUÊ: Garante que o outro lado recebeu e confirmou o FIN
+                            # NOTA: Atualmente retorna imediatamente após enviar FIN, 
+                            #       o que funciona mas não garante confirmação
+                            # _ ,_ = self.sock.recvfrom(self.limit.buffersize)
                             return [idAgent,requestType,message,ip]
                         
-                        # The response to a normal message
-                        #prevMessage = "|".join(lista)
+                        # Código comentado - alternativa de formatação de mensagem
+                        # Não é necessário porque prevMessage já contém a mensagem correta
+                        # prevMessage = "|".join(lista)
                         self.sock.sendto(self.formatMessage(lista[reqType],self.ackkey,idAgent,seq,ack,"\0"),(ip,port))
                     
 
@@ -442,10 +595,11 @@ class NetTask:
                     continue
 
 
-        ## With retransmission
-        # there is the probability of writing 2 times the same text
-        # Therefore, has the chunks arrive, we store the message before writing
-        # so only when the next chunk arrives, the next chunk is store and the other is written
+        ## Comentário explicativo sobre estratégia de escrita de ficheiros
+        # Com retransmissão, há probabilidade de escrever o mesmo texto 2 vezes
+        # Portanto, quando os chunks chegam, guardamos a mensagem antes de escrever
+        # assim só quando o próximo chunk chega, guardamos o próximo e escrevemos o anterior
+        # Esta estratégia previne duplicação de dados em caso de retransmissão
         else:
             file = open(self.storeFolder + fileName,"w")
             previous = None
@@ -492,8 +646,17 @@ class NetTask:
                                         self.sock.sendto(self.formatMessage(None,self.finkey,idAgent,seq,ack,"\0"),(ip,port))
                                         continue
                         
-                        #if previous != None: 
-                        #    file.write(previous)
+                        # Código comentado - escrita de chunk anterior
+                        # DEVERIA estar a ser usado para escrever o chunk anterior antes do atual
+        # ONDE: Antes de processar o chunk atual, escrever o anterior
+        # COMO: Descomentar estas linhas antes de previous = lista[messagePos]
+        # PORQUÊ: 
+        #   1. Implementa a estratégia descrita acima (escrever chunk anterior quando próximo chega)
+        #   2. Previne duplicação em caso de retransmissão
+        # NOTA: Atualmente o código escreve previous apenas quando recebe FIN,
+        #       o que pode perder o último chunk se não houver FIN
+        # if previous != None: 
+        #     file.write(previous)
 
                         previous = lista[messagePos]
                         
@@ -505,8 +668,22 @@ class NetTask:
                     continue
 
 
-    def startServer(self):
-        self.sock.bind((self.serverAddress,self.port))
-        while True:
-            print(self.receivePacket())
-            self.seqNum = 0
+    # Método não utilizado - o servidor usa recv() diretamente em vez deste método
+    # DEVERIA estar a ser usado no NMS_Server para receber mensagens continuamente
+    # ONDE: No NMS_Server.py, método recvMissionLink(), em vez de chamar self.missionLink.recv() diretamente
+    # COMO: Criar um thread ou loop que chama self.missionLink.startServer() para processar múltiplas conexões
+    # PORQUÊ:
+    #   1. Permite processar múltiplas conexões em paralelo
+    #   2. Melhor organização do código do servidor
+    #   3. Facilita escalabilidade para múltiplos rovers simultâneos
+    # NOTA: Este método chama receivePacket() que NÃO EXISTE
+    #       receivePacket() DEVERIA ser implementado ou substituído por recv()
+    # def startServer(self):
+    #     """
+    #     Inicia o servidor MissionLink em modo loop infinito.
+    #     Liga o socket e fica à espera de receber pacotes continuamente.
+    #     """
+    #     self.sock.bind((self.serverAddress,self.port))
+    #     while True:
+    #         print(self.receivePacket())  # ERRO: receivePacket() não existe, deveria ser recv()
+    #         self.seqNum = 0  # ERRO: self.seqNum não está definido

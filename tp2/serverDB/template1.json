@@ -34,7 +34,7 @@
               }
             }
           },
-          "alertflow_conditions": {
+          "telemetry_stream_conditions": {
             "cpu_usage": 80,
             "ram_usage": 90,
             "interface_stats": 2000,
@@ -72,7 +72,7 @@
               }
             }
           },
-          "alertflow_conditions": {
+          "telemetry_stream_conditions": {
             "cpu_usage": 75,
             "ram_usage": 85,
             "interface_stats": 1500,
@@ -110,7 +110,7 @@
               }
             }
           },
-          "alertflow_conditions": {
+          "telemetry_stream_conditions": {
             "cpu_usage": 80,
             "ram_usage": 90,
             "interface_stats": 2000,
@@ -148,7 +148,7 @@
               }
             }
           },
-          "alertflow_conditions": {
+          "telemetry_stream_conditions": {
             "cpu_usage": 80,
             "ram_usage": 90,
             "interface_stats": 2000,
