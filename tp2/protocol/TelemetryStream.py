@@ -3,7 +3,7 @@ from otherEntities import Limit
 
 
 # Variáveis não utilizadas - formato documentado não implementado
-# idAgentPos = 0
+# idMissionPos = 0
 # taskidPos = 1
 # flagPos = 2
 # messagePos = 3
@@ -14,7 +14,7 @@ class TelemetryStream:
     """
     Protocolo TelemetryStream (TS) - Protocolo aplicacional sobre TCP para transmissão
     contínua de dados de monitorização dos rovers para a Nave-Mãe.
-    Message format : idAgent|task_id|flag|message
+    Message format : idMission|task_id|flag|message
     """
     def __init__(self,ip,storefolder = ".",limit = 1024):
         """
@@ -51,22 +51,22 @@ class TelemetryStream:
             clientSocket.close()
         
     # Método não utilizado - calcula tamanho do cabeçalho para formato documentado não implementado
-    # DEVERIA estar a ser usado se o formato idAgent|task_id|flag|message fosse implementado
+    # DEVERIA estar a ser usado se o formato idMission|task_id|flag|message fosse implementado
     # ONDE: No método send() e recv() para calcular espaço disponível para dados
-    # COMO: Chamar self.getHeaderSize(idAgent, taskid) antes de enviar/receber para saber tamanho do cabeçalho
+    # COMO: Chamar self.getHeaderSize(idMission, taskid) antes de enviar/receber para saber tamanho do cabeçalho
     # PORQUÊ:
     #   1. Permite calcular corretamente o tamanho máximo de dados por pacote
     #   2. Necessário se implementar o formato documentado no PDF
     #   3. Melhor gestão de buffers e fragmentação
     # NOTA: O formato atual não usa este cabeçalho - envia tamanho do nome (4 bytes) + nome + conteúdo
-    # def getHeaderSize(self,idAgent,taskid):
+    # def getHeaderSize(self,idMission,taskid):
     #     """- \'|' - 1  bytes
-    #        - idAgent - 4  bytes
+    #        - idMission - 4  bytes
     #        - task_id - 4 + 3 bytes
     #        - flag - 1 bytes
     #     """
     #     #return 3 + 4 + 7 + 1
-    #     return len(f"{idAgent}|{taskid}|D|")
+    #     return len(f"{idMission}|{taskid}|D|")
 
 
     def formatInteger(self,num):
@@ -194,7 +194,7 @@ class TelemetryStream:
     # Método não utilizado - implementação alternativa para envio de alertas
     # DEVERIA estar a ser usado para enviar alertas em formato texto simples em vez de ficheiros
     # ONDE: No NMS_Agent quando condições de telemetria são excedidas, em vez de criar ficheiro JSON
-    # COMO: Chamar self.telemetryStream.sendAlert(idAgent, metrics_dict, serverIP) 
+    # COMO: Chamar self.telemetryStream.sendAlert(idMission, metrics_dict, serverIP) 
     #       em vez de criar ficheiro e chamar send()
     # PORQUÊ:
     #   1. Mais rápido para alertas simples (não precisa criar ficheiro)

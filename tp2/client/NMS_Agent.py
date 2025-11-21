@@ -66,15 +66,15 @@ class NMS_Agent:
         
         Args:
             ip (str): Endereço IP da Nave-Mãe
-            filename (str): Nome do ficheiro de métricas a enviar (formato: alert_idAgent_task-XXX_iter.json)
+            filename (str): Nome do ficheiro de métricas a enviar (formato: alert_idMission_task-XXX_iter.json)
         """
         lista = filename.split("_")
         iter = lista[3].split(".")[0]
-        idAgent = lista[2]
-        self.missionLink.send(ip,self.missionLink.port,self.missionLink.sendMetrics,idAgent,filename)
+        idMission = lista[2]
+        self.missionLink.send(ip,self.missionLink.port,self.missionLink.sendMetrics,idMission,filename)
         reply = self.missionLink.recv()
         while reply[1] != self.missionLink.ackkey and reply[2] != iter:
-            self.missionLink.send(ip,self.missionLink.port,self.missionLink.sendMetrics,idAgent,filename)
+            self.missionLink.send(ip,self.missionLink.port,self.missionLink.sendMetrics,idMission,filename)
             reply = self.missionLink.recv()
             
     def register(self,ip):

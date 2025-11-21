@@ -68,60 +68,60 @@ class NMS_Server:
         Processa registos de agentes e envio de métricas.
         """
         lista = self.missionLink.recv()
-        idAgent = lista[0]
+        idMission = lista[0]
         requestType = lista[1]
         filename = lista[2]
         ip = lista[3]
 
         if requestType == self.missionLink.registerAgent:
-            self.registerAgent(idAgent,ip) # It already sends the confirmation reply
+            self.registerAgent(idMission,ip) # It already sends the confirmation reply
             return
 
         if requestType  == self.missionLink.sendMetrics:
             iter = filename.split("_")[3].split(".")[0]
-            self.missionLink.send(ip,self.missionLink.port,self.missionLink.ackkey,idAgent,iter)
+            self.missionLink.send(ip,self.missionLink.port,self.missionLink.ackkey,idMission,iter)
             return
 
-    def sendTask(self,ip,idAgent,task):
+    def sendTask(self,ip,idMission,task):
         """
         Envia uma tarefa/missão para um rover através do MissionLink.
         Retransmite até receber confirmação válida.
         
         Args:
             ip (str): Endereço IP do rover
-            idAgent (str): Identificador do rover
+            idMission (str): Identificador do rover
             task: Objeto ou string com a definição da tarefa
         """
-        self.missionLink.send(ip,self.missionLink.port,self.missionLink.taskRequest,idAgent,task)
+        self.missionLink.send(ip,self.missionLink.port,self.missionLink.taskRequest,idMission,task)
         lista = self.missionLink.recv()
         while (
-            lista[0] != idAgent and
+            lista[0] != idMission and
             lista[1] != self.missionLink.ackkey and
             lista[3] != ip
         ):
-            self.missionLink.send(ip,self.missionLink.port,self.missionLink.taskRequest,idAgent,task)
+            self.missionLink.send(ip,self.missionLink.port,self.missionLink.taskRequest,idMission,task)
             lista = self.missionLink.recv()
             while lista[2] != task:
-                self.missionLink.send(ip,self.missionLink.port,self.missionLink.taskRequest,idAgent,task)
+                self.missionLink.send(ip,self.missionLink.port,self.missionLink.taskRequest,idMission,task)
                 lista = self.missionLink.recv()
 
 
 
-    def registerAgent(self,idAgent,ip):
+    def registerAgent(self,idMission,ip):
         """
         Regista um agente/rover no sistema.
         Envia confirmação de registo através do MissionLink.
         
         Args:
-            idAgent (str): Identificador único do agente
+            idMission (str): Identificador único do agente
             ip (str): Endereço IP do agente
         """
-        if self.agents.get(idAgent) == None:
-            self.agents[idAgent] = ip
-            self.missionLink.send(ip,self.missionLink.port,self.missionLink.ackkey,idAgent,"Registered")
-            #print(self.agents[idAgent])
+        if self.agents.get(idMission) == None:
+            self.agents[idMission] = ip
+            self.missionLink.send(ip,self.missionLink.port,self.missionLink.ackkey,idMission,"Registered")
+            #print(self.agents[idMission])
             return
-        self.missionLink.send(ip,self.missionLink.port,self.missionLink.ackkey,idAgent,"Already registered")
+        self.missionLink.send(ip,self.missionLink.port,self.missionLink.ackkey,idMission,"Already registered")
         #print("Already Registered")
 
 
