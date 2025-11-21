@@ -71,10 +71,10 @@ class NMS_Agent:
         lista = filename.split("_")
         iter = lista[3].split(".")[0]
         idMission = lista[2]
-        self.missionLink.send(ip,self.missionLink.port,self.missionLink.sendMetrics,idMission,filename)
+        self.missionLink.send(ip,self.missionLink.port,self.missionLink.sendMetrics,self.id,idMission,filename)
         reply = self.missionLink.recv()
-        while reply[1] != self.missionLink.ackkey and reply[2] != iter:
-            self.missionLink.send(ip,self.missionLink.port,self.missionLink.sendMetrics,idMission,filename)
+        while reply[2] != self.missionLink.ackkey and reply[3] != iter:
+            self.missionLink.send(ip,self.missionLink.port,self.missionLink.sendMetrics,self.id,idMission,filename)
             reply = self.missionLink.recv()
             
     def register(self,ip):
@@ -85,10 +85,11 @@ class NMS_Agent:
         Args:
             ip (str): Endereço IP da Nave-Mãe
         """
-        self.missionLink.send(ip,self.missionLink.port,self.missionLink.registerAgent,self.id,"\0")
+        # No registo, idMission = "000" porque ainda não há missão atribuída
+        self.missionLink.send(ip,self.missionLink.port,self.missionLink.registerAgent,self.id,"000","\0")
         lista = self.missionLink.recv()
-        while lista[1] != self.missionLink.ackkey and lista[0] != self.id:
-            self.missionLink.send(ip,self.missionLink.port,self.missionLink.registerAgent,self.id,"\0")
+        while lista[2] != self.missionLink.ackkey and lista[0] != self.id:
+            self.missionLink.send(ip,self.missionLink.port,self.missionLink.registerAgent,self.id,"000","\0")
             lista = self.missionLink.recv()
 
 
@@ -96,13 +97,19 @@ class NMS_Agent:
         """
         Recebe uma mensagem através do MissionLink.
         Se for um pedido de tarefa (taskRequest), armazena a tarefa e envia confirmação.
+        
+        NOTA: O idAgent é usado apenas no handshake. Nas mensagens de dados,
+              apenas idMission é enviado no protocolo.
         """
         lista = self.missionLink.recv()
-        if lista[1] == self.missionLink.taskRequest:
-            taskId = lista[2].split(".")[0]
+        # lista tem: [idAgent, idMission, requestType, message, ip]
+        # idAgent é identificado pelo IP/porta do handshake
+        if lista[2] == self.missionLink.taskRequest:
+            taskId = lista[3].split(".")[0]
             if self.tasks.get(taskId) != None:
-                self.tasks[taskId] = lista[2]
-            self.missionLink.send(lista[3],self.missionLink.port,self.missionLink.ackkey,self.id,taskId)
+                self.tasks[taskId] = lista[3]
+            # Envia ACK: idAgent usado apenas no handshake, idMission na mensagem
+            self.missionLink.send(lista[4],self.missionLink.port,self.missionLink.ackkey,self.id,lista[1],taskId)
         
 
     def sendTelemetry(self,ip,message):

@@ -3,7 +3,9 @@ from otherEntities import Limit
 
 
 # [flag,idMission,seq,ack,size,requestType,message]
-#   0       1    2   3   4      5           6
+#   0       1      2   3   4      5           6
+# NOTA: No handshake, idMission contém temporariamente o ID do rover
+#       Após handshake, idMission contém o ID da missão
 flagPos = 0
 idMissionPos = 1
 seqPos = 2
@@ -74,10 +76,13 @@ class MissionLink:
         Formata uma mensagem segundo o protocolo MissionLink.
         Formato: flag|idMission|seq|ack|size|requestType|message
         
+        NOTA: No handshake, idMission contém temporariamente o ID do rover.
+              Nas mensagens de dados, idMission contém o ID da missão.
+        
         Args:
             requestType (str or None): Tipo de pedido (R=Register, T=Task, M=Metrics) ou None
             flag (str): Flag de controlo (S=SYN, A=ACK, F=FIN, Z=SYN-ACK, D=Data)
-            idMission (str): Identificador do agente/rover
+            idMission (str): Identificador da missão (3 caracteres) ou ID do rover no handshake
             seqNum (int): Número de sequência
             ackNum (int): Número de acknowledgment
             message (str): Conteúdo da mensagem
@@ -170,19 +175,22 @@ class MissionLink:
     #     
     #     raise TimeoutError("Failed to receive valid SYN-ACK after multiple attempts.")
 
-    def startConnection(self, idMission, destAddress, destPort, retryLimit=5):
+    def startConnection(self, idAgent, destAddress, destPort, retryLimit=5):
         """
         Inicia uma conexão com handshake de 3 vias (SYN, SYN-ACK, ACK).
         Implementa mecanismo de fiabilidade sobre UDP.
         
+        NOTA: No handshake, o campo idMission é usado temporariamente para enviar o ID do rover.
+              A Nave-Mãe guarda o mapeamento (IP, porta) -> ID do rover.
+        
         Args:
-            idMission (str): Identificador do agente/rover
+            idAgent (str): Identificador do agente/rover (3 caracteres)
             destAddress (str): Endereço IP do destino
             destPort (int): Porta do destino
             retryLimit (int, optional): Número máximo de tentativas. Defaults to 5
             
         Returns:
-            tuple: ((destAddress, destPort), idMission, seq, ack) - Informação da conexão estabelecida
+            tuple: ((destAddress, destPort), idAgent, seq, ack) - Informação da conexão estabelecida
             
         Raises:
             TimeoutError: Se não conseguir estabelecer conexão após múltiplas tentativas
@@ -192,9 +200,9 @@ class MissionLink:
         
         while retries < retryLimit:
             try:
-                # Send SYN
+                # Send SYN - no handshake, idMission contém o ID do rover
                 self.sock.sendto(
-                    f"{self.synkey}|{idMission}|{seqinicial}|0|_|0|-.-".encode(),
+                    f"{self.synkey}|{idAgent}|{seqinicial}|0|_|0|-.-".encode(),
                     (destAddress, destPort)
                 )
                 # Print de debug comentado - útil para troubleshooting do handshake
@@ -205,7 +213,7 @@ class MissionLink:
                     lista = message.decode().split("|")
                     while lista[flagPos] != self.synackkey:
                         self.sock.sendto(
-                            f"{self.synkey}|{idMission}|{seqinicial}|0|_|0|-.-".encode(),
+                            f"{self.synkey}|{idAgent}|{seqinicial}|0|_|0|-.-".encode(),
                             (destAddress, destPort)
                         )
                         message,_ = self.sock.recvfrom(self.limit.buffersize)
@@ -220,11 +228,11 @@ class MissionLink:
                 # Print de debug comentado - mostra sequência do ACK enviado
                 # print(f"Sending ACK: seq={seqinicial}")
                 self.sock.sendto(
-                    f"{self.ackkey}|{idMission}|{seqinicial}|{seqinicial}|_|0|-.-".encode(),
+                    f"{self.ackkey}|{idAgent}|{seqinicial}|{seqinicial}|_|0|-.-".encode(),
                     (destAddress, destPort)
                 )
                 print("CONNECTION ESTABLISHED\n--------------")
-                return  (destAddress,destPort),idMission,seqinicial + 1,seqinicial + 1 # Handshake successful
+                return  (destAddress,destPort),idAgent,seqinicial + 1,seqinicial + 1 # Handshake successful
 
             
         
@@ -240,11 +248,14 @@ class MissionLink:
         Aceita uma conexão recebendo um pedido SYN e respondendo com handshake de 3 vias.
         Deve ser executado pelo servidor (Nave-Mãe).
         
+        NOTA: No handshake, o campo idMission contém temporariamente o ID do rover.
+              O servidor deve guardar o mapeamento (IP, porta) -> ID do rover.
+        
         Returns:
-            tuple: ((ip, port), idMission, seq, ack) - Informação da conexão estabelecida
+            tuple: ((ip, port), idAgent, seq, ack) - Informação da conexão estabelecida
                 - ip (str): Endereço IP do cliente
                 - port (int): Porta do cliente
-                - idMission (str): Identificador do agente
+                - idAgent (str): Identificador do agente/rover (extraído de idMission no handshake)
                 - seq (int): Número de sequência inicial
                 - ack (int): Número de acknowledgment inicial (igual a seq)
         """
@@ -257,7 +268,8 @@ class MissionLink:
             message,(ip,port) = self.sock.recvfrom(self.limit.buffersize)
             print(f"Message : {message}\nFrom : {ip}:{port}")  # Print ativo - mostra mensagens inválidas
             lista = message.decode().split("|")
-        idMission = lista[idMissionPos]
+        # No handshake, idMission contém o ID do rover
+        idAgent = lista[idMissionPos]
         # ENVIAR SYNACK 
         lista[flagPos] = self.synackkey
         prevLista = lista.copy()
@@ -268,16 +280,16 @@ class MissionLink:
                 message,_ = self.sock.recvfrom(self.limit.buffersize)
                 lista = message.decode().split("|")
                 if (lista[flagPos] == self.ackkey and 
-                lista[idMissionPos] == idMission and 
+                lista[idMissionPos] == idAgent and 
                 lista[ackPos] == lista[seqPos]):
                     print("CONECTION ESTABLISHED\n---------------")
-                    return (ip,port),idMission,int(lista[seqPos]),int(lista[ackPos])
+                    return (ip,port),idAgent,int(lista[seqPos]),int(lista[ackPos])
             except TimeoutError:
                 self.sock.sendto("|".join(prevLista).encode(),(ip,port))
 
         
         
-    def send(self,ip,port,requestType,idMission,message):
+    def send(self,ip,port,requestType,idAgent,idMission,message):
         """
         Envia uma mensagem ou ficheiro através do protocolo MissionLink.
         Estabelece conexão, envia dados com confirmação e fecha conexão.
@@ -286,7 +298,8 @@ class MissionLink:
             ip (str): Endereço IP do destinatário
             port (int): Porta do destinatário
             requestType (str): Tipo de pedido (R=Register, T=Task, M=Metrics)
-            idMission (str): Identificador do agente/rover
+            idAgent (str): Identificador do agente/rover (usado apenas no handshake)
+            idMission (str): Identificador da missão (3 caracteres, "000" se não aplicável)
             message (str): Mensagem ou caminho do ficheiro a enviar
             
         Returns:
@@ -294,7 +307,7 @@ class MissionLink:
         """
         # The connection starts with an handshake to assure it has a somewhat reliable 
         # transfers between the client and the server 
-        _,idMission,seq,ack = self.startConnection(idMission,ip,port)
+        _,idAgent,seq,ack = self.startConnection(idAgent,ip,port)
 
         #print(f"SEQ - {seq}\nACK - {ack}")
 
@@ -309,7 +322,6 @@ class MissionLink:
                         responseIp == ip and
                         responsePort == port and
                         lista[flagPos] == self.ackkey and
-                        lista[idMissionPos] == idMission and
                         lista[ackPos] == str(seq)
                     ):
                         seq += 1
@@ -332,7 +344,6 @@ class MissionLink:
                     if(
                         responseIp == ip and
                         responsePort == port and
-                        lista[idMissionPos] == idMission and
                         lista[flagPos] == self.ackkey and
                         lista[ackPos] == str(seq)
                     ):
@@ -392,7 +403,6 @@ class MissionLink:
                         #print(lista)
                         if (responseIp == ip and
                             responsePort == port and
-                            lista[idMissionPos] == idMission and
                             lista[ackPos] == str(seq) and 
                             lista[flagPos] == self.ackkey
                             ):
@@ -448,7 +458,6 @@ class MissionLink:
                         len(lista) == 7 and
                         responseIp == ip and
                         responsePort == port and
-                        lista[idMissionPos] == idMission and
                         lista[ackPos] == str(seq) and 
                         lista[flagPos] == self.ackkey
                     ):
@@ -468,7 +477,6 @@ class MissionLink:
                     if(
                         responseIp == ip and
                         responsePort == port and
-                        lista[idMissionPos] == idMission and
                         lista[ackPos] == str(seq) and
                         lista[flagPos] == self.finkey
                     ):
@@ -485,15 +493,17 @@ class MissionLink:
     # along with the agent ID 
     def recv(self):
         """
-        Returns a list with 4 items by order
-            - 0 - agentId
-            - 1 - request type
-            - 2 - file name  or the message in string
-            - 3 - ip address
+        Returns a list with 5 items by order
+            - 0 - idAgent (ID do rover)
+            - 1 - idMission (ID da missão)
+            - 2 - request type
+            - 3 - file name or the message in string
+            - 4 - ip address
         """
         message = ""
         # Establish connection
-        (ipDest,portDest),idMission,seq,ack = self.acceptConnection()
+        (ipDest,portDest),idAgent,seq,ack = self.acceptConnection()
+        idMission = None  # Será extraído da primeira mensagem
 
         print(f"SEQ - {seq}\nACK - {ack}")        
 
@@ -509,9 +519,9 @@ class MissionLink:
                 if (
                     ip == ipDest and 
                     port == portDest and
-                    lista[idMissionPos] == idMission and
                     lista[seqPos] == str(seq + 1)
                 ):
+                    idMission = lista[idMissionPos]  # Extrai idMission da primeira mensagem
                     requestType = lista[reqType]
                     seq += 1
                     ack = seq
@@ -540,12 +550,12 @@ class MissionLink:
                     print(f"EXPECTING - {ack + 1}\nRECEIVED - {lista[seqPos]}")
                     # When receiving a packet, the packet is accepted if:
                     # the length of the list is 7
-                    # the agent id is the same of the connection determined id
+                    # the mission id matches the connection's mission
                     # the seq is greater 1 unit the whats stored on receiver side
-                    # the IP address and Port must be the same
+                    # the IP address and Port must be the same (identifica o rover)
                     if(
                         len(lista) == 7 and
-                        lista[idMissionPos] == idMission and 
+                        lista[idMissionPos] == idMission and
                         lista[seqPos] == str(seq + 1) and
                         ipDest == ip and
                         port == portDest
@@ -575,7 +585,7 @@ class MissionLink:
                             # NOTA: Atualmente retorna imediatamente após enviar FIN, 
                             #       o que funciona mas não garante confirmação
                             # _ ,_ = self.sock.recvfrom(self.limit.buffersize)
-                            return [idMission,requestType,message,ip]
+                            return [idAgent,idMission,requestType,message,ip]
                         
                         # Código comentado - alternativa de formatação de mensagem
                         # Não é necessário porque prevMessage já contém a mensagem correta
@@ -641,7 +651,7 @@ class MissionLink:
                                             lista[flagPos] == self.finkey
                                         ):
                                             print("Supposedly ended")
-                                            return [idMission,requestType,fileName,ip]
+                                            return [idAgent,idMission,requestType,fileName,ip]
                                     except TimeoutError:
                                         self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,"\0"),(ip,port))
                                         continue
