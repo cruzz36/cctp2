@@ -47,10 +47,8 @@ class MissionLink:
         self.ackkey = "A"
         self.finkey = "F"
         self.synackkey = "Z"
-        # Variável não utilizada - usa-se "\0" diretamente no código
-        # DEVERIA ser usada em vez de "\0" hardcoded para melhor manutenibilidade
-        # Exemplo: self.formatMessage(..., self.eofkey) em vez de self.formatMessage(..., "\0")
-        # self.eofkey = '\0'
+        # Constante para fim de mensagem - melhora manutenibilidade
+        self.eofkey = '\0'
 
     
     def server(self):
@@ -222,7 +220,7 @@ class MissionLink:
                     # print("RECEBEU O SYNACK CORRETO")
 
                 except TimeoutError:
-                    print("Nao deu")  # Mensagem de erro - deveria ser mais descritiva
+                    print("Nao deu para fazer Handshake na connection")  # Mensagem de erro - deveria ser mais descritiva
 
                 # Send ACK
                 # Print de debug comentado - mostra sequência do ACK enviado
@@ -352,18 +350,28 @@ class MissionLink:
                         buffer = file.read(self.limit.buffersize - self.getHeaderSize())
                 except TimeoutError:
                     self.sock.sendto(self.formatMessage(requestType,self.datakey,idMission,seq,ack,buffer),(ip,port))
-            # Código comentado - incremento de seq/ack não necessário
-            # DEVERIA estar a ser usado se quisermos incrementar seq antes de enviar FIN
-            # ONDE: Antes de enviar o pacote FIN para fechar conexão
-            # COMO: Descomentar estas linhas antes de self.sock.sendto(...self.finkey...)
+            # ANTES: Enviava FIN com o mesmo seq do último chunk (seq já incrementado no loop)
+            # MUDANÇA: Incrementar seq antes de enviar FIN para garantir número de sequência diferente
             # PORQUÊ: 
             #   1. Garante que o FIN tem um número de sequência diferente do último dado
             #   2. Mais correto do ponto de vista do protocolo
-            # NOTA: Atualmente não é necessário porque seq já foi incrementado no loop anterior
-            #       e o FIN usa o mesmo seq, o que funciona mas não é ideal
-            # seq+=1
-            # ack = seq
-            self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,"\0"),(ip,port))
+            #   3. Evita ambiguidade entre último chunk e FIN
+            # COMO: Incrementar seq e ack antes de enviar FIN
+            seq += 1
+            ack = seq
+            # Código antigo (comentado):
+            # # Código comentado - incremento de seq/ack não necessário
+            # # DEVERIA estar a ser usado se quisermos incrementar seq antes de enviar FIN
+            # # ONDE: Antes de enviar o pacote FIN para fechar conexão
+            # # COMO: Descomentar estas linhas antes de self.sock.sendto(...self.finkey...)
+            # # PORQUÊ: 
+            # #   1. Garante que o FIN tem um número de sequência diferente do último dado
+            # #   2. Mais correto do ponto de vista do protocolo
+            # # NOTA: Atualmente não é necessário porque seq já foi incrementado no loop anterior
+            # #       e o FIN usa o mesmo seq, o que funciona mas não é ideal
+            # # seq+=1
+            # # ack = seq
+            self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
             while True:
                 try:
                     text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
@@ -383,10 +391,10 @@ class MissionLink:
                         seq += 1
                         ack = seq
                         print("Got the correct packet")
-                        self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,"\0"),(ip,port))
+                        self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                         return True
                 except TimeoutError:
-                    self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,"\0"),(ip,port))
+                    self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                     
 
         else:
@@ -408,37 +416,70 @@ class MissionLink:
                             ):
                             seq += 1
                             ack = seq
-                            self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,"\0"),(ip,port))
-                            return True
-                            # Código comentado - implementação alternativa de fechamento de conexão
-                            # DEVERIA estar a ser usado para garantir fechamento bidirecional da conexão
-                            # ONDE: Após enviar FIN e receber ACK, esperar pelo FIN do outro lado e responder com ACK
-                            # COMO: Descomentar este bloco em vez de apenas return True após enviar FIN
-                            # PORQUÊ:
-                            #   1. Implementa fechamento de conexão TCP completo (4-way handshake)
+                            self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
+                            # ANTES: return True imediatamente após enviar FIN
+                            # MUDANÇA: Implementar fechamento bidirecional completo (4-way handshake)
+                            # PORQUÊ: 
+                            #   1. Implementa fechamento de conexão completo (4-way handshake)
                             #   2. Garante que ambos os lados confirmam o fechamento
                             #   3. Mais robusto para garantir que a conexão está realmente fechada
-                            # NOTA: Tem um bug - lista[ackPos] == seq deveria ser lista[ackPos] == str(seq)
-                            #       e falta (ip,port) no último sendto
-                            # """
-                            # while True:
-                            #     try:
-                            #         text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
-                            #         lista = text.decode().split("|")
-                            #         if(
-                            #             responseIp == ip and
-                            #             responsePort == port and
-                            #             lista[idMissionPos] == idMission and
-                            #             lista[ackPos] == str(seq) and  # BUG corrigido: era seq, deveria ser str(seq)
-                            #             lista[flagPos] == self.finkey
-                            #         ):
-                            #             seq += 1
-                            #             ack = seq
-                            #             self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,"\0"),(ip,port))  # BUG corrigido: faltava (ip,port)
-                            #             return "Message Sent"
-                            #     except TimeoutError:
-                            #         self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,"\0"),(ip,port))
-                            # """
+                            # COMO: Após enviar FIN, aguardar ACK do FIN enviado OU FIN do outro lado
+                            #       Se receber FIN do outro lado, responder com ACK e terminar
+                            while True:
+                                try:
+                                    text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
+                                    lista = text.decode().split("|")
+                                    if (
+                                        responseIp == ip and
+                                        responsePort == port and
+                                        len(lista) == 7 and
+                                        lista[idMissionPos] == idMission
+                                    ):
+                                        if lista[flagPos] == self.finkey:
+                                            # Recebeu FIN do outro lado - responder com ACK e terminar
+                                            seq += 1
+                                            ack = seq
+                                            self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
+                                            return True
+                                        elif lista[flagPos] == self.ackkey and lista[ackPos] == str(seq):
+                                            # Recebeu ACK do FIN enviado - agora esperar FIN do outro lado
+                                            # Continuar loop para aguardar FIN
+                                            continue
+                                except TimeoutError:
+                                    # Reenvia FIN se timeout (pode ser que o outro lado ainda não recebeu)
+                                    self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
+                                    continue
+                            # Código antigo (comentado):
+                            # return True
+                            # # Código comentado - implementação alternativa de fechamento de conexão
+                            # # DEVERIA estar a ser usado para garantir fechamento bidirecional da conexão
+                            # # ONDE: Após enviar FIN e receber ACK, esperar pelo FIN do outro lado e responder com ACK
+                            # # COMO: Descomentar este bloco em vez de apenas return True após enviar FIN
+                            # # PORQUÊ:
+                            # #   1. Implementa fechamento de conexão TCP completo (4-way handshake)
+                            # #   2. Garante que ambos os lados confirmam o fechamento
+                            # #   3. Mais robusto para garantir que a conexão está realmente fechada
+                            # # NOTA: Tem um bug - lista[ackPos] == seq deveria ser lista[ackPos] == str(seq)
+                            # #       e falta (ip,port) no último sendto
+                            # # """
+                            # # while True:
+                            # #     try:
+                            # #         text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
+                            # #         lista = text.decode().split("|")
+                            # #         if(
+                            # #             responseIp == ip and
+                            # #             responsePort == port and
+                            # #             lista[idMissionPos] == idMission and
+                            # #             lista[ackPos] == str(seq) and  # BUG corrigido: era seq, deveria ser str(seq)
+                            # #             lista[flagPos] == self.finkey
+                            # #         ):
+                            # #             seq += 1
+                            # #             ack = seq
+                            # #             self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,"\0"),(ip,port))  # BUG corrigido: faltava (ip,port)
+                            # #             return "Message Sent"
+                            # #     except TimeoutError:
+                            # #         self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,"\0"),(ip,port))
+                            # # """
                                     
                         continue
                     except TimeoutError:
@@ -469,7 +510,7 @@ class MissionLink:
                     print(f"\n\nResent the seq - {seq}")
                     self.sock.sendto(self.formatMessage(requestType,self.datakey,idMission,seq,ack,chunks[i]),(ip,port))
                     continue
-            self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,"\0"),(ip,port))
+            self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
             while True:
                 try:
                     text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
@@ -482,7 +523,7 @@ class MissionLink:
                     ):
                         return True                  
                 except TimeoutError:
-                    self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,"\0"),(ip,port))
+                    self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                     
                 
 
@@ -531,7 +572,7 @@ class MissionLink:
                     else:
                         print("Message")
                         firstMessage = lista[messagePos]
-                    self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,"\0"),(ip,port))
+                    self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                     break
             except TimeoutError:
                 #print("Timed out on the first message")
@@ -576,21 +617,41 @@ class MissionLink:
                             # DEVERIAM estar ativos durante desenvolvimento/debug
                             # print(lista)
                             # print("Received the end connection packet")
-                            self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,"\0"),(ip,port))
-                            # Código comentado - espera por ACK do FIN enviado
-                            # DEVERIA estar a ser usado para garantir fechamento completo da conexão
-                            # ONDE: Após enviar FIN, esperar pelo ACK antes de retornar
-                            # COMO: Descomentar e processar a resposta antes de return
-                            # PORQUÊ: Garante que o outro lado recebeu e confirmou o FIN
-                            # NOTA: Atualmente retorna imediatamente após enviar FIN, 
-                            #       o que funciona mas não garante confirmação
+                            self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
+                            # ANTES: Retornava imediatamente após enviar FIN sem esperar confirmação
+                            # MUDANÇA: Esperar pelo ACK do FIN enviado antes de retornar
+                            # PORQUÊ: Garante que o outro lado recebeu e confirmou o FIN, fechamento mais robusto
+                            # COMO: Aguardar receção de ACK com flag apropriada antes de return
+                            while True:
+                                try:
+                                    ack_response, (ack_ip, ack_port) = self.sock.recvfrom(self.limit.buffersize)
+                                    ack_lista = ack_response.decode().split("|")
+                                    if (
+                                        ack_ip == ipDest and
+                                        ack_port == portDest and
+                                        len(ack_lista) == 7 and
+                                        ack_lista[flagPos] == self.ackkey and
+                                        ack_lista[idMissionPos] == idMission and
+                                        ack_lista[ackPos] == str(seq)
+                                    ):
+                                        # Recebeu ACK do FIN - conexão fechada corretamente
+                                        return [idAgent,idMission,requestType,message,ip]
+                                except TimeoutError:
+                                    # Reenvia FIN se não receber ACK
+                                    self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
+                                    continue
+                            # Código antigo (comentado):
                             # _ ,_ = self.sock.recvfrom(self.limit.buffersize)
-                            return [idAgent,idMission,requestType,message,ip]
+                            # return [idAgent,idMission,requestType,message,ip]
                         
                         # Código comentado - alternativa de formatação de mensagem
                         # Não é necessário porque prevMessage já contém a mensagem correta
                         # prevMessage = "|".join(lista)
-                        self.sock.sendto(self.formatMessage(lista[reqType],self.ackkey,idMission,seq,ack,"\0"),(ip,port))
+                        # ANTES: self.sock.sendto(self.formatMessage(lista[reqType],self.ackkey,idMission,seq,ack,"\0"),(ip,port))
+                        # MUDANÇA: Usar self.eofkey em vez de "\0" hardcoded
+                        # PORQUÊ: Melhora manutenibilidade - se precisarmos mudar o EOF, mudamos apenas em um lugar
+                        # COMO: Substituir "\0" por self.eofkey
+                        self.sock.sendto(self.formatMessage(lista[reqType],self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                     
 
 
@@ -601,7 +662,7 @@ class MissionLink:
                 # So, to make sure, we sent the previous message that was supposed to be sent
                 except TimeoutError:
                     if prevMessage != None:
-                        self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,"\0"),(ip,port))
+                        self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                     continue
 
 
@@ -626,14 +687,24 @@ class MissionLink:
                     ):
                         seq += 1
                         ack = seq
-                        # The packet is a Fin packet
+                        # ANTES: Escrevia previous apenas quando recebia FIN
+                        # MUDANÇA: Escrever chunk anterior antes de processar o atual (estratégia anti-duplicação)
+                        # PORQUÊ: 
+                        #   1. Implementa a estratégia descrita: escrever chunk anterior quando próximo chega
+                        #   2. Previne duplicação em caso de retransmissão
+                        #   3. Garante que todos os chunks são escritos, mesmo o último
+                        # COMO: Escrever previous antes de atualizar para lista[messagePos]
                         if previous != None:
                             file.write(previous)
+                        # Código antigo (comentado):
+                        # # The packet is a Fin packet
+                        # if previous != None:
+                        #     file.write(previous)
                         if lista[flagPos] == self.finkey: # Verify this, can be correct
                                 #print(f"SEQ SENT - {seq}\nACK SENT - {ack}")
                                 #print(f"SEQ FROM LAST MESSAGE - {lista[seqPos]}\nACK FROM LAST MESSAGE - {lista[ackPos]}")
                                 file.close()
-                                self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,"\0"),(ip,port))
+                                self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                                 while True:
                                     try:
                                         text,(ip,port) = self.sock.recvfrom(self.limit.buffersize)
@@ -653,28 +724,33 @@ class MissionLink:
                                             print("Supposedly ended")
                                             return [idAgent,idMission,requestType,fileName,ip]
                                     except TimeoutError:
-                                        self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,"\0"),(ip,port))
+                                        self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                                         continue
                         
-                        # Código comentado - escrita de chunk anterior
-                        # DEVERIA estar a ser usado para escrever o chunk anterior antes do atual
-        # ONDE: Antes de processar o chunk atual, escrever o anterior
-        # COMO: Descomentar estas linhas antes de previous = lista[messagePos]
-        # PORQUÊ: 
-        #   1. Implementa a estratégia descrita acima (escrever chunk anterior quando próximo chega)
-        #   2. Previne duplicação em caso de retransmissão
-        # NOTA: Atualmente o código escreve previous apenas quando recebe FIN,
-        #       o que pode perder o último chunk se não houver FIN
-        # if previous != None: 
-        #     file.write(previous)
-
+                        # ANTES: previous era atualizado sem escrever o chunk anterior primeiro
+                        #        (exceto quando recebia FIN)
+                        # MUDANÇA: Escrever previous antes de atualizar (já implementado acima)
+                        # PORQUÊ: Previne duplicação e garante que todos os chunks são escritos
+                        # COMO: A escrita já foi movida para antes desta linha (ver código acima)
+                        # Código antigo (comentado):
+                        # # Código comentado - escrita de chunk anterior
+                        # # DEVERIA estar a ser usado para escrever o chunk anterior antes do atual
+                        # # ONDE: Antes de processar o chunk atual, escrever o anterior
+                        # # COMO: Descomentar estas linhas antes de previous = lista[messagePos]
+                        # # PORQUÊ: 
+                        # #   1. Implementa a estratégia descrita acima (escrever chunk anterior quando próximo chega)
+                        # #   2. Previne duplicação em caso de retransmissão
+                        # # NOTA: Atualmente o código escreve previous apenas quando recebe FIN,
+                        # #       o que pode perder o último chunk se não houver FIN
+                        # if previous != None: 
+                        #     file.write(previous)
                         previous = lista[messagePos]
                         
-                        self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,"\0"),(ip,port))
+                        self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
 
                         
                 except TimeoutError:
-                    self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,"\0"),(ip,port))
+                    self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                     continue
 
 
