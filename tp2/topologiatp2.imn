@@ -92,22 +92,22 @@ node n5 {
 
 link l1 {
     nodes {n2 n1}
-    bandwidth 0
+    bandwidth 10000000
 }
 
 link l2 {
     nodes {n1 n5}
-    bandwidth 0
+    bandwidth 10000000
 }
 
 link l3 {
     nodes {n5 n4}
-    bandwidth 0
+    bandwidth 10000000
 }
 
 link l4 {
     nodes {n5 n3}
-    bandwidth 0
+    bandwidth 10000000
 }
 
 canvas c1 {
