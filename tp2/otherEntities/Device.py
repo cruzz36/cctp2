@@ -36,17 +36,6 @@ def removeNulls(text):
     return text        
 
 
-# Classe não implementada - Task seria uma classe separada para representar tarefas
-# DEVERIA estar implementada se quisermos separar a lógica de tarefas dos dispositivos
-# ONDE: Criar ficheiro Task.py ou adicionar aqui para representar tarefas recebidas da Nave-Mãe
-# COMO: class Task: com atributos como task_id, task_type, parameters, etc.
-# PORQUÊ:
-#   1. Melhor separação de responsabilidades (Device = hardware, Task = missão)
-#   2. Permite reutilizar tarefas entre diferentes dispositivos
-#   3. Mais fácil de testar e manter
-# NOTA: Atualmente as tarefas são armazenadas como strings/dicts em self.tasks
-# class Task:
-        
 class Device:
     """
     Classe que representa um dispositivo/rover e as suas configurações de monitorização.
@@ -64,10 +53,6 @@ class Device:
         self.id = device["device_id"]
         self.metrics = device["device_metrics"]
         self.bandwidth = device["link_metrics"]["bandwidth"]
-        # Variáveis não utilizadas - acede-se diretamente a self.bandwidth["jitter"] e self.bandwidth["packet_loss"]
-        # Não são necessárias porque o código usa self.bandwidth diretamente
-        # self.jitter = self.bandwidth["jitter"]
-        # self.packetLoss = self.bandwidth["packet_loss"]
         self.latency = self.bandwidth["latency"]
         self.limits = device["telemetry_stream_conditions"]
     

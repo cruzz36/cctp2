@@ -92,16 +92,6 @@ def validateMission(mission_data):
     return True, ""
 
 
-"""
-    Esta classe deve poder medir :
-        bandwith
-        jitter (iperf)
-        packet loss (iperf)
-        latency (ping)
-
-    iperf Tutorial:
-        iperf -u -f B -o filename.* ... - protocolo udp, formato em Bytes,output para ficheiro 
-"""
 def validateTelemetryMessage(telemetry_data):
     """
     Valida se mensagem de telemetria cumpre requisitos mínimos do PDF.
@@ -208,10 +198,7 @@ class NMS_Agent:
         self.ipAddress = self.getinterfaces()[0].split(" ")[1]
         self.serverAddress = serverAddress
         self.missionLink = MissionLink.MissionLink(self.ipAddress,storeFolder)
-        self.telemetryStream = TelemetryStream.TelemetryStream(self.ipAddress,storeFolder) #tcp = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-        # Variável não utilizada - guarda nomes de interfaces mas nunca é usada
-        # DEVERIA ser usada em getConnections() ou para reportar interfaces ativas ao servidor
-        # self.connections = self.getinterfacesNames(self.getinterfaces())
+        self.telemetryStream = TelemetryStream.TelemetryStream(self.ipAddress,storeFolder)
         self.tasks = dict()
         self.frequency = frequency
         
@@ -843,31 +830,6 @@ class NMS_Agent:
         """
         self.devices = Device.Device(file)
 
-    # Método não utilizado - nunca é chamado no código
-    # DEVERIA estar a ser usado para reportar interfaces de rede ao servidor durante o registo
-    # ONDE: No método register() ou sendMetrics(), para informar a Nave-Mãe sobre as interfaces disponíveis
-    # COMO: Chamar self.getConnections() e incluir no registo ou nas métricas enviadas
-    # PORQUÊ: Permite à Nave-Mãe saber quais interfaces cada rover tem disponíveis para comunicação
-    # NOTA: Tem um bug - lista[size] deveria ser lista[size-1] para evitar IndexError
-    # def getConnections(self):
-    #     """
-    #     Obtém informações sobre as conexões de rede do agente.
-    #     
-    #     Returns:
-    #         str or None: String formatada com informações das interfaces ou None se não houver interfaces
-    #     """
-    #     message = f""
-    #     lista = self.getinterfaces()
-    #     size = len(lista)
-    #     if size == 0: return None
-    #     message += f"{lista[0]}|"
-    #     for a in lista:
-    #         if lista[size] != a:  # BUG: deveria ser lista[size-1]
-    #             message += f"{a}|"
-    #             continue
-    #         message += f"{a}\0"
-    #     return message
-    
     def getBandwidth(self,serverip,role,duration,transport,frequency):
         """
         Mede largura de banda, jitter e perda de pacotes usando iperf.
@@ -1063,21 +1025,3 @@ class NMS_Agent:
         return (rx_rate + tx_rate) / self.frequency
 
     
-    # Método não implementado/incompleto - executaria tarefas recebidas da Nave-Mãe
-    # DEVERIA estar implementado para executar as missões/tarefas recebidas via MissionLink
-    # ONDE: Após receber tarefa em recvMissionLink(), chamar este método para executá-la
-    # COMO: 
-    #   1. Iterar sobre self.tasks (que contém tarefas recebidas)
-    #   2. Fazer parse do JSON da tarefa
-    #   3. Executar ações conforme tipo de tarefa
-    #   4. Reportar resultados de volta à Nave-Mãe
-    # PORQUÊ:
-    #   1. Permite aos rovers executar missões recebidas
-    #   2. Essencial para o funcionamento completo do sistema
-    #   3. Permite coordenação entre Nave-Mãe e rovers
-    # NOTA: Código incompleto - falta implementação completa
-    #       Atualmente as tarefas são apenas armazenadas em self.tasks mas não executadas
-    # def runTask(self):
-    #     for task in self.tasks:
-    #         file = open(task)
-    #         config = json  # Incompleto - falta json.load(file)
