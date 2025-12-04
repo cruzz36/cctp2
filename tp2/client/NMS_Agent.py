@@ -4,7 +4,92 @@ from otherEntities import Device
 import os
 import subprocess
 import time
-import psutil
+import psutil  # type: ignore  # Instalar com: pip install psutil
+import json
+
+def validateMission(mission_data):
+    """
+    Valida se um dicionário contém todos os campos obrigatórios de uma missão.
+    
+    Formato obrigatório de missão (conforme PDF):
+    {
+        "mission_id": string (obrigatório, identificador único),
+        "rover_id": string (obrigatório),
+        "geographic_area": dict (obrigatório),
+        "task": string (obrigatório: capture_images|sample_collection|environmental_analysis|...),
+        "duration_minutes": integer (obrigatório, > 0),
+        "update_frequency_seconds": integer (obrigatório, > 0)
+    }
+    
+    Campos opcionais:
+    - "priority": string (low|medium|high)
+    - "instructions": string
+    
+    Args:
+        mission_data (dict or str): Dicionário ou string JSON com dados da missão
+        
+    Returns:
+        tuple: (bool, str) - (True, "") se válido, (False, mensagem_erro) se inválido
+    """
+    # Se for string, fazer parse
+    if isinstance(mission_data, str):
+        try:
+            mission_data = json.loads(mission_data)
+        except json.JSONDecodeError:
+            return False, "Formato JSON inválido"
+    
+    if not isinstance(mission_data, dict):
+        return False, "Dados da missão devem ser um dicionário"
+    
+    # Campos obrigatórios
+    required_fields = {
+        "mission_id": str,
+        "rover_id": str,
+        "geographic_area": dict,
+        "task": str,
+        "duration_minutes": (int, float),
+        "update_frequency_seconds": (int, float)
+    }
+    
+    # Verificar presença e tipo dos campos obrigatórios
+    for field, expected_type in required_fields.items():
+        if field not in mission_data:
+            return False, f"Campo obrigatório ausente: {field}"
+        
+        if not isinstance(mission_data[field], expected_type):
+            return False, f"Campo {field} tem tipo incorreto. Esperado: {expected_type}"
+    
+    # Validações específicas
+    if mission_data["duration_minutes"] <= 0:
+        return False, "duration_minutes deve ser maior que 0"
+    
+    if mission_data["update_frequency_seconds"] <= 0:
+        return False, "update_frequency_seconds deve ser maior que 0"
+    
+    # Validar geographic_area
+    geo_area = mission_data["geographic_area"]
+    if not isinstance(geo_area, dict):
+        return False, "geographic_area deve ser um dicionário"
+    
+    # Verificar se tem coordenadas (formato rectangle com x1, y1, x2, y2)
+    if "x1" in geo_area and "y1" in geo_area and "x2" in geo_area and "y2" in geo_area:
+        try:
+            x1, y1, x2, y2 = float(geo_area["x1"]), float(geo_area["y1"]), float(geo_area["x2"]), float(geo_area["y2"])
+            if x1 >= x2 or y1 >= y2:
+                return False, "Coordenadas inválidas: x1 < x2 e y1 < y2 são obrigatórios"
+        except (ValueError, TypeError):
+            return False, "Coordenadas devem ser números válidos"
+    else:
+        # Outros formatos podem ser adicionados aqui (polygon, circle, etc.)
+        return False, "geographic_area deve conter coordenadas (x1, y1, x2, y2) ou outro formato válido"
+    
+    # Validar task (valores comuns)
+    valid_tasks = ["capture_images", "sample_collection", "environmental_analysis"]
+    if mission_data["task"] not in valid_tasks:
+        # Aceitar outros valores mas avisar
+        pass
+    
+    return True, ""
 
 
 """
@@ -93,23 +178,167 @@ class NMS_Agent:
             lista = self.missionLink.recv()
 
 
+    def requestMission(self, ip):
+        """
+        Solicita uma missão à Nave-Mãe através do MissionLink.
+        Implementa o requisito: "O rover deve ser capaz de solicitar uma missão à Nave-Mãe."
+        
+        Args:
+            ip (str): Endereço IP da Nave-Mãe
+            
+        Returns:
+            dict or None: Dicionário com dados da missão recebida, ou None se não houver missão disponível
+        """
+        # Enviar solicitação de missão
+        self.missionLink.send(ip, self.missionLink.port, self.missionLink.requestMission, self.id, "000", "request")
+        
+        # Aguardar resposta (pode ser missão ou mensagem de "sem missão disponível")
+        try:
+            response = self.missionLink.recv()
+            if response[2] == self.missionLink.taskRequest:
+                # Missão recebida - processar
+                return self.recvMissionLink()
+            elif response[2] == self.missionLink.ackkey:
+                # Sem missão disponível
+                print("Nave-Mãe respondeu: sem missão disponível no momento")
+                return None
+        except Exception as e:
+            print(f"Erro ao solicitar missão: {e}")
+            return None
+
     def recvMissionLink(self):
         """
         Recebe uma mensagem através do MissionLink.
-        Se for um pedido de tarefa (taskRequest), armazena a tarefa e envia confirmação.
+        Se for um pedido de tarefa (taskRequest), valida o formato da missão,
+        armazena a missão e envia confirmação.
+        
+        Formato esperado da missão (conforme PDF):
+        {
+            "mission_id": string (obrigatório),
+            "rover_id": string (obrigatório),
+            "geographic_area": {"x1": float, "y1": float, "x2": float, "y2": float},
+            "task": string (obrigatório),
+            "duration_minutes": integer (obrigatório, > 0),
+            "update_frequency_seconds": integer (obrigatório, > 0)
+        }
         
         NOTA: O idAgent é usado apenas no handshake. Nas mensagens de dados,
               apenas idMission é enviado no protocolo.
+        
+        Returns:
+            dict or None: Dicionário com dados da missão validada, ou None se não for missão válida
         """
         lista = self.missionLink.recv()
-        # lista tem: [idAgent, idMission, requestType, message, ip]
+        # lista tem: [idAgent, idMission, missionType, message, ip]
         # idAgent é identificado pelo IP/porta do handshake
+        
+        # missionType = tipo de operação do protocolo (R, T, M, Q, P)
+        # Quando missionType="T" (taskRequest), o campo 'message' contém um JSON
+        # que inclui o campo "task" com um dos 3 valores: capture_images, sample_collection, environmental_analysis
         if lista[2] == self.missionLink.taskRequest:
-            taskId = lista[3].split(".")[0]
-            if self.tasks.get(taskId) != None:
-                self.tasks[taskId] = lista[3]
-            # Envia ACK: idAgent usado apenas no handshake, idMission na mensagem
-            self.missionLink.send(lista[4],self.missionLink.port,self.missionLink.ackkey,self.id,lista[1],taskId)
+            mission_message = lista[3]
+            mission_id = lista[1]  # idMission do protocolo
+            
+            # Validar formato da missão
+            is_valid, error_msg = validateMission(mission_message)
+            
+            if not is_valid:
+                print(f"Erro: Missão recebida é inválida: {error_msg}")
+                # Enviar ACK mesmo assim para não bloquear o servidor
+                self.missionLink.send(lista[4], self.missionLink.port, self.missionLink.ackkey, self.id, mission_id, "invalid")
+                return None
+            
+            # Parse do JSON da missão
+            try:
+                if isinstance(mission_message, str):
+                    mission_data = json.loads(mission_message)
+                else:
+                    mission_data = mission_message
+            except json.JSONDecodeError as e:
+                print(f"Erro: Não foi possível fazer parse do JSON da missão: {e}")
+                self.missionLink.send(lista[4], self.missionLink.port, self.missionLink.ackkey, self.id, mission_id, "parse_error")
+                return None
+            
+            # Verificar se o rover_id corresponde
+            if mission_data.get("rover_id") != self.id:
+                print(f"Aviso: Missão {mission_id} destinada a outro rover ({mission_data.get('rover_id')})")
+                # Continuar mesmo assim - pode ser útil para debug
+            
+            # Armazenar missão validada
+            self.tasks[mission_id] = mission_data
+            
+            # Extrair informações da missão para processamento
+            print(f"Missão recebida e validada:")
+            print(f"  ID: {mission_data.get('mission_id')}")
+            print(f"  Tarefa: {mission_data.get('task')}")
+            print(f"  Duração: {mission_data.get('duration_minutes')} minutos")
+            print(f"  Frequência de atualização: {mission_data.get('update_frequency_seconds')} segundos")
+            print(f"  Área geográfica: ({mission_data['geographic_area'].get('x1')}, {mission_data['geographic_area'].get('y1')}) a ({mission_data['geographic_area'].get('x2')}, {mission_data['geographic_area'].get('y2')})")
+            
+            # Enviar ACK de confirmação
+            self.missionLink.send(lista[4], self.missionLink.port, self.missionLink.ackkey, self.id, mission_id, mission_id)
+            
+            return mission_data
+        
+        return None
+
+    def reportMissionProgress(self, ip, mission_id, progress_data):
+        """
+        Reporta o progresso de uma missão à Nave-Mãe.
+        Implementa o requisito: "O rover deve reportar o progresso da missão de acordo 
+        com parâmetros definidos na própria missão."
+        
+        Formato de progress_data:
+        {
+            "mission_id": string (obrigatório),
+            "progress_percent": integer (0-100, obrigatório),
+            "status": string (obrigatório: "in_progress"|"completed"|"failed"|"paused"),
+            "current_position": {"x": float, "y": float} (opcional),
+            "events": list (opcional, lista de eventos ocorridos),
+            "samples_collected": integer (opcional, para tarefas de coleta),
+            "images_captured": integer (opcional, para tarefas de captura),
+            "time_elapsed_minutes": float (opcional),
+            "estimated_completion_minutes": float (opcional)
+        }
+        
+        Args:
+            ip (str): Endereço IP da Nave-Mãe
+            mission_id (str): Identificador da missão
+            progress_data (dict): Dicionário com dados de progresso
+            
+        Returns:
+            bool: True se progresso foi reportado com sucesso, False caso contrário
+        """
+        # Validar campos obrigatórios
+        if "mission_id" not in progress_data:
+            progress_data["mission_id"] = mission_id
+        
+        if "progress_percent" not in progress_data:
+            print("Erro: progress_percent é obrigatório")
+            return False
+        
+        if "status" not in progress_data:
+            print("Erro: status é obrigatório")
+            return False
+        
+        # Converter para JSON
+        progress_json = json.dumps(progress_data)
+        
+        # Enviar reporte de progresso
+        try:
+            self.missionLink.send(ip, self.missionLink.port, self.missionLink.reportProgress, self.id, mission_id, progress_json)
+            
+            # Aguardar confirmação
+            response = self.missionLink.recv()
+            if response[2] == self.missionLink.ackkey:
+                print(f"Progresso da missão {mission_id} reportado com sucesso")
+                return True
+            else:
+                print(f"Falha ao reportar progresso: resposta inesperada")
+                return False
+        except Exception as e:
+            print(f"Erro ao reportar progresso: {e}")
+            return False
         
 
     def sendTelemetry(self,ip,message):

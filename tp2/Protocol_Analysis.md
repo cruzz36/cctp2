@@ -4,7 +4,7 @@
 
 ### MissionLink (ML) - Protocolo UDP
 
-**Formato da mensagem:** `flag|idMission|seq|ack|size|requestType|message`
+**Formato da mensagem:** `flag|idMission|seq|ack|size|missionType|message`
 
 #### Campos e seus usos:
 
@@ -19,7 +19,7 @@
      - `"A"` (ACK): Confirmação de receção
        - **Uso:** `CC/tp2/protocol/MissionLink.py`, linha 223: `f"{self.ackkey}|{idMission}|{seqinicial}|{seqinicial}|_|0|-.-"`
      - `"D"` (Data): Dados a transmitir
-       - **Uso:** `CC/tp2/protocol/MissionLink.py`, linha 304: `self.formatMessage(requestType,self.datakey,idMission,seq,ack,message)`
+       - **Uso:** `CC/tp2/protocol/MissionLink.py`, linha 304: `self.formatMessage(missionType,self.datakey,idMission,seq,ack,message)`
      - `"F"` (FIN): Fecha conexão
        - **Uso:** `CC/tp2/protocol/MissionLink.py`, linha 355: `self.formatMessage(None,self.finkey,idMission,seq,ack,"\0")`
 
@@ -58,21 +58,21 @@
      - **Cálculo:** `CC/tp2/protocol/MissionLink.py`, linha 89: `{len(message)}`
      - Usado para fragmentação quando mensagem excede buffer size
 
-6. **`requestType`** (1 byte)
-   - **Descrição e Necessidade:** O campo `requestType` identifica o tipo de operação que a mensagem representa (Registo, Tarefa, Métricas). É necessário para que o recetor saiba como processar a mensagem - se é um registo de rover, envio de tarefa, ou envio de métricas. Cada tipo requer processamento diferente e roteamento para diferentes handlers. Sem este campo, o recetor não saberia que ação tomar com a mensagem recebida.
-   - **Localização no código:** `CC/tp2/protocol/MissionLink.py`, linha 12: `reqType = 5`
+6. **`missionType`** (1 byte)
+   - **Descrição e Necessidade:** O campo `missionType` identifica o tipo de operação que a mensagem representa (Registo, Tarefa, Métricas, Solicitação de Missão, Progresso). É necessário para que o recetor saiba como processar a mensagem - se é um registo de rover, envio de tarefa, envio de métricas, solicitação de missão ou reporte de progresso. Cada tipo requer processamento diferente e roteamento para diferentes handlers. Sem este campo, o recetor não saberia que ação tomar com a mensagem recebida.
+   - **Localização no código:** `CC/tp2/protocol/MissionLink.py`, linha 14: `missionTypePos = 5`
    - **Valores possíveis:**
      - `"R"` (Register): Registo de rover
        - **Uso:** `CC/tp2/client/NMS_Agent.py`, linha 88: `self.missionLink.registerAgent`
-       - **Processamento:** `CC/tp2/server/NMS_Server.py`, linha 76: `if requestType == self.missionLink.registerAgent`
+       - **Processamento:** `CC/tp2/server/NMS_Server.py`, linha 76: `if missionType == self.missionLink.registerAgent`
      - `"T"` (Task): Envio de tarefa/missão
        - **Uso:** `CC/tp2/server/NMS_Server.py`, linha 95: `self.missionLink.taskRequest`
        - **Processamento:** `CC/tp2/client/NMS_Agent.py`, linha 101: `if lista[1] == self.missionLink.taskRequest`
      - `"M"` (Metrics): Envio de métricas
        - **Uso:** `CC/tp2/client/NMS_Agent.py`, linha 74: `self.missionLink.sendMetrics`
-       - **Processamento:** `CC/tp2/server/NMS_Server.py`, linha 80: `if requestType == self.missionLink.sendMetrics`
-     - `"N"` (None): Sem tipo de pedido específico
-       - **Uso:** `CC/tp2/protocol/MissionLink.py`, linha 90: quando `requestType == None`
+       - **Processamento:** `CC/tp2/server/NMS_Server.py`, linha 80: `if missionType == self.missionLink.sendMetrics`
+     - `"N"` (None): Sem tipo de missão específico
+       - **Uso:** `CC/tp2/protocol/MissionLink.py`, linha 90: quando `missionType == None`
 
 7. **`message`** (variável)
    - **Descrição e Necessidade:** O campo `message` contém o payload real da mensagem - os dados efetivos a transmitir. É necessário porque é onde se transporta a informação útil: nomes de ficheiros, dados JSON de tarefas, métricas, ou confirmações. O tamanho variável permite flexibilidade para diferentes tipos de conteúdo, desde mensagens curtas até ficheiros grandes fragmentados. Sem este campo, não haveria forma de transportar os dados reais da comunicação.
@@ -132,7 +132,7 @@ Rover                    MissionLink (UDP)              Nave-Mãe
   |   seq=100                 |                              |
   |   ack=0                   |                              |
   |   size=_                  |                              |
-  |   reqType=0               |                              |
+   |   missionType=0            |                              |
   |   message=-.-             |                              |
   |                           |--2. SYN--------------------->|
   |                           |                              |
@@ -156,7 +156,7 @@ Rover                    MissionLink (UDP)              Nave-Mãe
   |   seq=101                 |                              |
   |   ack=101                 |                              |
   |   size=1                  |                              |
-  |   reqType=R               |                              |
+   |   missionType=R               |                              |
   |   message=\0              |                              |
   |                           |--5. DATA-------------------->|
   |                           |                              |
@@ -173,8 +173,8 @@ Rover                    MissionLink (UDP)              Nave-Mãe
   |   seq=102                 |   idMission=rover_id           |
   |   ack=102                 |   seq=102                    |
   |   size=9                  |   ack=102                    |
-  |   reqType=A               |   size=9                     |
-  |   message=Registered      |   reqType=A                  |
+   |   missionType=A               |   size=9                     |
+  |   message=Registered      |   missionType=A                  |
   |                           |   message=Registered         |
   |                           |                              |
   |--8. ACK------------------>|                              |
@@ -190,7 +190,7 @@ Rover                    MissionLink (UDP)              Nave-Mãe
   |   seq=103                 |                              |
   |   ack=103                 |                              |
   |   size=1                  |                              |
-  |   reqType=N               |                              |
+   |   missionType=N               |                              |
   |   message=\0              |                              |
   |                           |--9. FIN--------------------->|
   |                           |                              |
@@ -249,7 +249,7 @@ Nave-Mãe                 MissionLink (UDP)              Rover
   |   seq=101                 |                              |
   |   ack=101                 |                              |
   |   size=XXX                |                              |
-  |   reqType=T               |                              |
+   |   missionType=T               |                              |
   |   message={task JSON}     |                              |
   |                           |--4. DATA-------------------->|
   |                           |                              |
@@ -321,7 +321,7 @@ Rover                    MissionLink (UDP)              Nave-Mãe
   |   seq=101                 |                              |
   |   ack=101                 |                              |
   |   size=XXX                |                              |
-  |   reqType=M               |                              |
+   |   missionType=M               |                              |
   |   message=alert_...json   |                              |
   |                           |--4. DATA (filename)--------->|
   |                           |                              |
@@ -338,7 +338,7 @@ Rover                    MissionLink (UDP)              Nave-Mãe
   |   seq=102                 |                              |
   |   ack=102                 |                              |
   |   size=1000               |                              |
-  |   reqType=M               |                              |
+   |   missionType=M               |                              |
   |   message={JSON chunk 1}  |                              |
   |                           |--6. DATA (chunk 1)---------->|
   |                           |                              |
@@ -355,7 +355,7 @@ Rover                    MissionLink (UDP)              Nave-Mãe
   |   seq=103                 |                              |
   |   ack=103                 |                              |
   |   size=500                |                              |
-  |   reqType=M               |                              |
+   |   missionType=M               |                              |
   |   message={JSON chunk 2}  |                              |
   |                           |--8. DATA (chunk 2)---------->|
   |                           |                              |
@@ -393,8 +393,8 @@ Rover                    MissionLink (UDP)              Nave-Mãe
   |   seq=106                 |   idMission=rover_id           |
   |   ack=106                 |   seq=106                    |
   |   size=1                  |   ack=106                    |
-  |   reqType=A               |   size=1                     |
-  |   message=1               |   reqType=A                  |
+   |   missionType=A               |   size=1                     |
+  |   message=1               |   missionType=A                  |
   |                           |   message=1 (iteração)       |
   |                           |                              |
   |--14. ACK----------------->|                              |
@@ -459,7 +459,7 @@ Rover                    TelemetryStream (TCP)          Nave-Mãe
 - **idMission:** ID do rover
 - **seq/ack:** Controlo de sequência
 - **size:** 1 (mensagem vazia `\0`)
-- **requestType:** R (Register)
+- **missionType:** R (Register)
 - **message:** `\0` (vazio)
 
 ### Envio de Tarefa (Task - T)
@@ -467,7 +467,7 @@ Rover                    TelemetryStream (TCP)          Nave-Mãe
 - **idMission:** ID do rover destinatário
 - **seq/ack:** Controlo de sequência
 - **size:** Tamanho do JSON da tarefa
-- **requestType:** T (Task)
+- **missionType:** T (Task)
 - **message:** JSON com configuração da tarefa
 
 ### Envio de Métricas (Metrics - M)
@@ -475,7 +475,7 @@ Rover                    TelemetryStream (TCP)          Nave-Mãe
 - **idMission:** ID do rover
 - **seq/ack:** Controlo de sequência (incrementa por chunk)
 - **size:** Tamanho de cada chunk (máx 1000 bytes por chunk)
-- **requestType:** M (Metrics)
+- **missionType:** M (Metrics)
 - **message:** Nome do ficheiro (primeiro pacote), depois chunks do ficheiro JSON
 
 ### Telemetria (TelemetryStream)
