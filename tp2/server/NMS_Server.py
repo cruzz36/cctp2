@@ -93,16 +93,33 @@ def removeNulls(text):
     """
     Remove todas as strings vazias de uma lista.
     
+    COMO FUNCIONA:
+    - Tenta remover strings vazias ("") da lista repetidamente
+    - Continua até não haver mais strings vazias (quando remove() lança exceção)
+    - Usa try-except para detectar quando não há mais strings vazias
+    
+    PORQUÊ:
+    - Comandos do sistema (como 'ip') podem retornar linhas vazias
+    - Estas linhas vazias causam problemas no processamento
+    - Remove todas de uma vez para limpar a lista
+    
     Args:
-        text (list): Lista de strings
+        text (list): Lista de strings (será modificada in-place)
         
     Returns:
-        list: Lista sem strings vazias
+        list: Lista sem strings vazias (mesma referência, modificada)
+    
+    NOTA: Modifica a lista original (não cria cópia)
     """
+    # Loop infinito até não haver mais strings vazias
     while True:
         try:
-            text = text.remove("")
-        except Exception as e:
+            # Tenta remover uma string vazia da lista
+            # remove() modifica a lista in-place e retorna None
+            text.remove("")
+        except ValueError:
+            # Quando não há mais strings vazias, remove() lança ValueError
+            # Sai do loop e retorna a lista limpa
             break
     return text
 
@@ -178,27 +195,20 @@ class NMS_Server:
             self.registerAgent(idAgent,ip) # It already sends the confirmation reply
             return
 
-        if missionType == self.missionLink.sendMetrics:  # "M"
-            # Rover envia métricas (nome de ficheiro JSON)
-            # Bug fix: Validar formato do nome do ficheiro antes de fazer split
-            try:
-                parts = message.split("_")
-                if len(parts) >= 4:
-                    iter = parts[3].split(".")[0]
-                else:
-                    # Formato inválido - usar valor padrão ou mensagem de erro
-                    iter = "unknown"
-                    print(f"Aviso: Formato de nome de ficheiro inválido: {message}")
-            except (IndexError, AttributeError) as e:
-                print(f"Erro ao processar nome de ficheiro de métricas: {e}")
-                iter = "error"
-            # Bug fix: ackkey é uma flag, não um missionType
-            # O método send() não é apropriado para enviar apenas ACKs - ele faz handshake completo
-            # Para enviar ACK com mensagem, devemos usar formatMessage diretamente ou criar método específico
-            # Por agora, usamos None como missionType (send() internamente usará datakey como flag)
-            # NOTA: Idealmente, deveria haver um método sendACK() separado, mas para compatibilidade usamos send()
-            self.missionLink.send(ip,self.missionLink.port,None,idAgent,idMission,iter)
-            return
+        # if missionType == self.missionLink.sendMetrics:  # "M"
+        #     # Rover envia métricas (nome de ficheiro JSON)
+        #     try:
+        #         parts = message.split("_")
+        #         if len(parts) >= 4:
+        #             iter = parts[3].split(".")[0]
+        #         else:
+        #             iter = "unknown"
+        #             print(f"Aviso: Formato de nome de ficheiro inválido: {message}")
+        #     except (IndexError, AttributeError) as e:
+        #         print(f"Erro ao processar nome de ficheiro de métricas: {e}")
+        #         iter = "error"
+        #     self.missionLink.send(ip,self.missionLink.port,None,idAgent,idMission,iter)
+        #     return
 
         if missionType == self.missionLink.requestMission:  # "Q"
             # Rover solicita uma missão à Nave-Mãe

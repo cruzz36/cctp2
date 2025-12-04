@@ -1,12 +1,8 @@
 import socket
+import os
+import threading
+import json
 from otherEntities import Limit
-
-
-# Variáveis não utilizadas - formato documentado não implementado
-# idMissionPos = 0
-# taskidPos = 1
-# flagPos = 2
-# messagePos = 3
 
 lenMessageSize = 4
 
@@ -14,7 +10,8 @@ class TelemetryStream:
     """
     Protocolo TelemetryStream (TS) - Protocolo aplicacional sobre TCP para transmissão
     contínua de dados de monitorização dos rovers para a Nave-Mãe.
-    Message format : idMission|task_id|flag|message
+    
+    Formato de mensagem: tamanho_nome(4 bytes) + nome_ficheiro + conteúdo_ficheiro
     """
     def __init__(self,ip,storefolder = ".",limit = 1024):
         """
@@ -27,47 +24,112 @@ class TelemetryStream:
         """
         self.ip = ip
         self.port = 8081
+        # Criar socket para servidor (bind) - será usado apenas no modo servidor
+        # Para envios (send()), criamos novo socket para cada conexão
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            self.socket.bind((self.ip,self.port))
+            # Tentar fazer bind - pode falhar se porta já estiver em uso (normal em testes)
+            self.socket.bind((self.ip, self.port))
         except OSError:
-            None
-        if storefolder.endswith("/"): self.storefolder = storefolder
-        else: self.storefolder = f"{storefolder}/"
+            # Porta já em uso - normal se múltiplas instâncias ou socket já ligado
+            # O socket ainda pode ser usado para accept() se já estiver ligado
+            pass
+        if storefolder.endswith("/"): 
+            self.storefolder = storefolder
+        else: 
+            self.storefolder = f"{storefolder}/"
         self.limit = Limit.Limit(limit)
-        # Flags não utilizadas - formato documentado não implementado
-        # self.flagend = "F"
-        # self.flagdata = "D"
 
+    def _handle_client(self, clientSocket, ip, port):
+        """
+        Processa uma conexão de cliente em thread separada.
+        Permite processamento paralelo de múltiplos rovers.
+        
+        COMO FUNCIONA:
+        - Recebe dados de telemetria do cliente
+        - Organiza ficheiros por rover_id (se possível)
+        - Fecha conexão após processamento
+        
+        PORQUÊ:
+        - Permite processar múltiplas conexões simultaneamente
+        - Não bloqueia outras conexões
+        - Melhora capacidade de lidar com múltiplos rovers em paralelo
+        
+        Args:
+            clientSocket (socket.socket): Socket do cliente
+            ip (str): Endereço IP do cliente
+            port (int): Porta do cliente
+        """
+        try:
+            filename = self.recv(clientSocket, ip, port)
+            filename_str = filename.decode()
+            
+            # Tentar organizar por rover_id se o ficheiro contém telemetria JSON
+            try:
+                # Ler ficheiro recebido para extrair rover_id
+                file_path = os.path.join(self.storefolder, filename_str)
+                if os.path.exists(file_path):
+                    with open(file_path, "r") as f:
+                        telemetry_data = json.load(f)
+                        rover_id = telemetry_data.get("rover_id", "unknown")
+                        
+                        # Criar pasta por rover se não existir
+                        rover_folder = os.path.join(self.storefolder, rover_id)
+                        os.makedirs(rover_folder, exist_ok=True)
+                        
+                        # Mover ficheiro para pasta do rover
+                        new_path = os.path.join(rover_folder, filename_str)
+                        if os.path.exists(file_path) and file_path != new_path:
+                            os.rename(file_path, new_path)
+                            print(f"Telemetria de {rover_id} organizada em: {rover_folder}/")
+            except (json.JSONDecodeError, KeyError, OSError) as e:
+                # Se não conseguir organizar, manter na pasta principal
+                pass
+            
+            print(f"Telemetria recebida de {ip}: {filename_str}")
+        except Exception as e:
+            print(f"Erro ao receber telemetria de {ip}: {e}")
+        finally:
+            clientSocket.close()
+    
     def server(self):
         """
         Inicia o servidor TelemetryStream em modo loop infinito.
-        Aceita conexões TCP, recebe dados de telemetria e fecha a conexão.
+        Aceita conexões TCP de múltiplos rovers e processa em paralelo.
+        
+        COMO FUNCIONA:
+        - Coloca o socket em modo listening
+        - Aceita conexões TCP de clientes (rovers) em loop infinito
+        - Para cada conexão, cria thread separada para processamento paralelo
+        - Threads processam dados de telemetria sem bloquear outras conexões
+        
+        PORQUÊ:
+        - TCP permite conexões confiáveis para transmissão de telemetria
+        - Threads permitem processar múltiplos rovers simultaneamente
+        - Melhora capacidade de lidar com múltiplos rovers em paralelo
+        - Organiza dados por rover_id automaticamente
+        
+        NOTA: Este método bloqueia indefinidamente - deve ser executado em thread separada
         """
         self.socket.listen()
-        while True:
-            clientSocket,(ip,_) = self.socket.accept()
-            print(self.recv(clientSocket,ip,self.port))
-            clientSocket.close()
+        print(f"Servidor TelemetryStream a escutar em {self.ip}:{self.port}")
+        print("Aceitando conexões de múltiplos rovers em paralelo...")
         
-    # Método não utilizado - calcula tamanho do cabeçalho para formato documentado não implementado
-    # DEVERIA estar a ser usado se o formato idMission|task_id|flag|message fosse implementado
-    # ONDE: No método send() e recv() para calcular espaço disponível para dados
-    # COMO: Chamar self.getHeaderSize(idMission, taskid) antes de enviar/receber para saber tamanho do cabeçalho
-    # PORQUÊ:
-    #   1. Permite calcular corretamente o tamanho máximo de dados por pacote
-    #   2. Necessário se implementar o formato documentado no PDF
-    #   3. Melhor gestão de buffers e fragmentação
-    # NOTA: O formato atual não usa este cabeçalho - envia tamanho do nome (4 bytes) + nome + conteúdo
-    # def getHeaderSize(self,idMission,taskid):
-    #     """- \'|' - 1  bytes
-    #        - idMission - 4  bytes
-    #        - task_id - 4 + 3 bytes
-    #        - flag - 1 bytes
-    #     """
-    #     #return 3 + 4 + 7 + 1
-    #     return len(f"{idMission}|{taskid}|D|")
-
+        while True:
+            try:
+                clientSocket, (ip, _) = self.socket.accept()
+                # Criar thread para processar conexão em paralelo
+                client_thread = threading.Thread(
+                    target=self._handle_client,
+                    args=(clientSocket, ip, self.port),
+                    daemon=True
+                )
+                client_thread.start()
+                print(f"Nova conexão de {ip} - processando em thread separada")
+            except Exception as e:
+                print(f"Erro no servidor TelemetryStream: {e}")
+                # Continuar loop mesmo em caso de erro
+                continue
 
     def formatInteger(self,num):
         """
@@ -91,6 +153,17 @@ class TelemetryStream:
         Primeiro recebe o tamanho do nome do ficheiro (4 bytes), depois o nome do ficheiro,
         e finalmente o conteúdo do ficheiro.
         
+        COMO FUNCIONA:
+        - Recebe 4 bytes que indicam o tamanho do nome do ficheiro
+        - Recebe o nome do ficheiro (número de bytes indicado)
+        - Recebe o conteúdo do ficheiro em chunks até receber dados vazios
+        - Escreve o ficheiro na pasta storefolder
+        
+        PORQUÊ:
+        - TCP é stream-oriented, então precisamos saber o tamanho do nome antes de receber
+        - Receção em chunks permite lidar com ficheiros grandes
+        - Validação previne ataques (tamanho excessivo)
+        
         Args:
             clientSock (socket.socket): Socket TCP do cliente conectado
             ip (str): Endereço IP do cliente
@@ -98,22 +171,52 @@ class TelemetryStream:
             
         Returns:
             bytes: Nome do ficheiro recebido
+            
+        Raises:
+            ValueError: Se o tamanho do nome do ficheiro for inválido
+            OSError: Se houver erro ao escrever o ficheiro
         """ 
-
-        message = clientSock.recv(lenMessageSize)
-        fileNameLen = int(message.decode())
-
-        filename = clientSock.recv(fileNameLen)
-
-        file = open(f"{self.storefolder}{filename.decode()}","w")
-
-        message = clientSock.recv(self.limit.buffersize)
-
-        while message != b"":
-            file.write(message.decode())
-            message = clientSock.recv(self.limit.buffersize)
-        file.close()
-        return filename
+        try:
+            # Receber tamanho do nome do ficheiro (4 bytes)
+            message = clientSock.recv(lenMessageSize)
+            if len(message) != lenMessageSize:
+                raise ValueError(f"Tamanho do nome do ficheiro inválido: recebidos {len(message)} bytes, esperados {lenMessageSize}")
+            
+            fileNameLen = int(message.decode())
+            
+            # Validar tamanho do nome do ficheiro (prevenir ataques)
+            if fileNameLen < 1 or fileNameLen > 255:
+                raise ValueError(f"Tamanho do nome do ficheiro inválido: {fileNameLen} (deve estar entre 1 e 255)")
+            
+            # Receber nome do ficheiro
+            filename = clientSock.recv(fileNameLen)
+            if len(filename) != fileNameLen:
+                raise ValueError(f"Nome do ficheiro incompleto: recebidos {len(filename)} bytes, esperados {fileNameLen}")
+            
+            filename_str = filename.decode()
+            
+            # Criar pasta se não existir
+            os.makedirs(self.storefolder, exist_ok=True)
+            
+            # Receber e escrever conteúdo do ficheiro
+            file_path = os.path.join(self.storefolder, filename_str)
+            with open(file_path, "w") as file:
+                message = clientSock.recv(self.limit.buffersize)
+                while message != b"":
+                    file.write(message.decode())
+                    message = clientSock.recv(self.limit.buffersize)
+            
+            return filename
+            
+        except ValueError as e:
+            print(f"Erro de validação ao receber telemetria: {e}")
+            raise
+        except OSError as e:
+            print(f"Erro ao escrever ficheiro de telemetria: {e}")
+            raise
+        except Exception as e:
+            print(f"Erro ao receber telemetria: {e}")
+            raise
                 
 
 
@@ -122,136 +225,98 @@ class TelemetryStream:
         Envia um ficheiro de telemetria para o servidor através de TCP.
         Primeiro envia o tamanho do nome do ficheiro, depois o nome, e finalmente o conteúdo.
         
+        COMO FUNCIONA:
+        - Cria um novo socket TCP para cada envio (evita conflito com socket do servidor)
+        - Conecta ao servidor, envia tamanho do nome (4 bytes), nome do ficheiro, e conteúdo
+        - Fecha a conexão após envio completo
+        
+        PORQUÊ:
+        - O socket criado no __init__ pode estar ligado ao servidor (bind)
+        - Tentar fazer connect() num socket já ligado causa OSError
+        - Criar novo socket para cada envio garante que funciona tanto como cliente quanto servidor
+        
         Args:
             ip (str): Endereço IP do servidor destinatário
             message (str): Caminho do ficheiro a enviar
             
         Returns:
-            bool: True se o ficheiro foi enviado com sucesso
+            bool: True se o ficheiro foi enviado com sucesso, False em caso de erro
         """
-        self.socket.connect((ip,self.port))
-        #self.reconnect(ip)
-        length = self.formatInteger(len(message))
-        print(length)
-        self.socket.sendall(length.encode())
-
-        self.socket.sendall(message.encode())
-        file = open(message,"r")
-
-        buffer = file.read(self.limit.buffersize)
-        while buffer != "":
-            self.socket.sendall(buffer.encode())
-            buffer = file.read(self.limit.buffersize)
+        # Criar novo socket para cada envio (evita conflito com socket do servidor)
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         
-        file.close()
-        self.endConnection()
-        print("Sent")
-        return True
-        
-
-
-    # Método alternativo de servidor não utilizado - implementação diferente de server()
-    # DEVERIA estar a ser usado se quisermos manter múltiplas conexões abertas simultaneamente
-    # ONDE: Substituir o método server() atual que fecha conexões imediatamente
-    # COMO: Usar este método em vez de server() no NMS_Server.recvTelemetry()
-    # PORQUÊ:
-    #   1. Permite manter conexões TCP abertas para múltiplos rovers simultaneamente
-    #   2. Melhor para transmissão contínua de telemetria sem reestabelecer conexão
-    #   3. Mais eficiente para comunicação frequente
-    # NOTA: A implementação atual (server()) fecha a conexão após cada receção, 
-    #       este método manteria conexões abertas mas requer gestão de threads
-    # def listen(self):
-    #     self.socket.bind((self.ip,self.port))
-    #     self.socket.listen()
-    #     print(f"Server listening on {self.ip}:{self.port}...")
-    #     
-    #     while True:
-    #         clientSocket, address = self.socket.accept()
-    #         print(f"Connection established with {address}")
-    #         
-    #         try:
-    #             while True:
-    #                 data = clientSocket.recv(1024)
-    #                 
-    #                 if not data:
-    #                     print(f"Connection closed by {address}")
-    #                     break  # Exit loop if the client disconnects
-    #
-    #                 try:
-    #                     decoded_data = data.decode()
-    #                     print(f"Received data: {decoded_data}")
-    #                     # Process the decoded_data here, e.g., store or handle the message
-    #                 except UnicodeDecodeError:
-    #                     print("Received invalid data, skipping...")
-    #                     continue  # Skip to the next iteration if decoding fails
-    #
-    #         except Exception as e:
-    #             print(f"Error with client {address}: {e}")
-    #         finally:
-    #             clientSocket.close()
-    #             print(f"Connection with {address} closed.")
-
-    # Método não utilizado - implementação alternativa para envio de alertas
-    # DEVERIA estar a ser usado para enviar alertas em formato texto simples em vez de ficheiros
-    # ONDE: No NMS_Agent quando condições de telemetria são excedidas, em vez de criar ficheiro JSON
-    # COMO: Chamar self.telemetryStream.sendAlert(idMission, metrics_dict, serverIP) 
-    #       em vez de criar ficheiro e chamar send()
-    # PORQUÊ:
-    #   1. Mais rápido para alertas simples (não precisa criar ficheiro)
-    #   2. Formato mais compacto para alertas urgentes
-    #   3. Menos overhead de I/O
-    # NOTA: Tem problemas:
-    #   - Usa sendto() (UDP) mas TelemetryStream é TCP - deveria usar sendall()
-    #   - Referencia self.serverPort que não existe - deveria ser self.port
-    #   - Formato diferente do atual (JSON em ficheiros)
-    # def sendAlert(self, id, metrics,ip):
-    #     # Parse metrics into a string
-    #     parsedMetrics = ";".join([f"{metric}={value}" for metric, value in metrics])
-    #     message = f"{id}|{parsedMetrics}"
-    #
-    #     try:
-    #         # Attempt to send the message
-    #         self.socket.sendto(message.encode(),(ip,self.serverPort))  # ERRO: sendto é UDP, deveria ser sendall para TCP
-    #         print(f"Sent alert: {message}")
-    #     except (BrokenPipeError, ConnectionResetError):
-    #         # Connection issues, handle reconnection
-    #         print("Connection lost, attempting to reconnect...")
-    #         self.reconnect()  # ERRO: reconnect() não existe ou não está implementado corretamente
-    #         try:
-    #             self.socket.send(message.encode())
-    #             print(f"Sent alert after reconnect: {message}")
-    #         except Exception as error:
-    #             print(f"Failed to send alert after reconnect: {error}")
-    #     except Exception as error:
-    #         # General exception handling
-    #         print(f"Failed to send alert: {error}")
-
-    # Método não utilizado - nunca é chamado no código
-    # def reconnect(self,ip):
-    #     """
-    #     Reconecta o socket TCP ao servidor após uma desconexão.
-    #     
-    #     Args:
-    #         ip (str): Endereço IP do servidor
-    #         
-    #     Note:
-    #         Este método parece ter uma referência a self.serverPort que pode não existir.
-    #     """
-    #     # Close existing socket and create a new one
-    #     if self.socket is not None:
-    #         self.socket.close()
-    #     self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #     try:
-    #         self.socket.connect((ip, self.serverPort))
-    #         print("Reconnected successfully.")
-    #     except Exception as error:
-    #         print(f"Failed to reconnect: {error}")
-    #         self.socket = None  # Ensure socket is None if reconnection fails
+        try:
+            # Verificar se ficheiro existe antes de tentar enviar
+            if not os.path.exists(message):
+                print(f"Erro: Ficheiro {message} não encontrado")
+                return False
+            
+            # Extrair apenas o nome do ficheiro (sem caminho completo)
+            filename = os.path.basename(message)
+            
+            # Conectar ao servidor
+            client_socket.connect((ip, self.port))
+            
+            # Enviar tamanho do nome do ficheiro (4 bytes)
+            length = self.formatInteger(len(filename))
+            client_socket.sendall(length.encode())
+            
+            # Enviar nome do ficheiro
+            client_socket.sendall(filename.encode())
+            
+            # Enviar conteúdo do ficheiro em chunks
+            with open(message, "r") as file:
+                buffer = file.read(self.limit.buffersize)
+                while buffer != "":
+                    client_socket.sendall(buffer.encode())
+                    buffer = file.read(self.limit.buffersize)
+            
+            # Fechar conexão
+            client_socket.close()
+            print("Sent")
+            return True
+            
+        except ConnectionRefusedError:
+            print(f"Erro: Servidor {ip}:{self.port} recusou conexão")
+            client_socket.close()
+            return False
+        except TimeoutError:
+            print(f"Erro: Timeout ao conectar a {ip}:{self.port}")
+            client_socket.close()
+            return False
+        except FileNotFoundError:
+            print(f"Erro: Ficheiro {message} não encontrado")
+            client_socket.close()
+            return False
+        except OSError as e:
+            print(f"Erro de conexão: {e}")
+            client_socket.close()
+            return False
+        except Exception as e:
+            print(f"Erro ao enviar telemetria: {e}")
+            client_socket.close()
+            return False
 
     def endConnection(self):
         """
-        Fecha a conexão TCP atual.
+        Fecha a conexão TCP do socket principal.
+        
+        NOTA: Este método fecha o socket do servidor (self.socket).
+        Para envios (send()), um novo socket é criado e fechado automaticamente.
+        Este método é útil apenas se precisar fechar o servidor explicitamente.
+        
+        COMO FUNCIONA:
+        - Verifica se o socket existe e está aberto
+        - Fecha o socket
+        - Imprime mensagem de confirmação
+        
+        PORQUÊ:
+        - Permite fechar o servidor explicitamente se necessário
+        - Útil para cleanup ou reinicialização
         """
         if self.socket is not None:
-            self.socket.close()
-            print("Connection closed.")
+            try:
+                self.socket.close()
+                print("Connection closed.")
+            except Exception as e:
+                print(f"Erro ao fechar conexão: {e}")

@@ -5,16 +5,33 @@ def removeNulls(text):
     """
     Remove todas as strings vazias de uma lista.
     
+    COMO FUNCIONA:
+    - Tenta remover strings vazias ("") da lista repetidamente
+    - Continua até não haver mais strings vazias (quando remove() lança exceção)
+    - Usa try-except para detectar quando não há mais strings vazias
+    
+    PORQUÊ:
+    - Comandos do sistema (como 'ip') podem retornar linhas vazias
+    - Estas linhas vazias causam problemas no processamento
+    - Remove todas de uma vez para limpar a lista
+    
     Args:
-        text (list): Lista de strings
+        text (list): Lista de strings (será modificada in-place)
         
     Returns:
-        list: Lista sem strings vazias
+        list: Lista sem strings vazias (mesma referência, modificada)
+    
+    NOTA: Modifica a lista original (não cria cópia)
     """
+    # Loop infinito até não haver mais strings vazias
     while True:
         try:
+            # Tenta remover uma string vazia da lista
+            # Se houver, remove e continua o loop
             text.remove("")
         except:
+            # Quando não há mais strings vazias, remove() lança ValueError
+            # Sai do loop e retorna a lista limpa
             break
     return text        
 
@@ -127,3 +144,55 @@ class Device:
             final[a] = client.get_packet_rate(start[a],end[a])
 
         return final
+    
+    def createTelemetryMessage(self, client, rover_id=None, position=None, operational_status=None):
+        """
+        Cria mensagem de telemetria completa conforme requisitos do PDF.
+        
+        Combina métricas técnicas recolhidas (CPU, RAM, bandwidth, etc.) com campos obrigatórios
+        de telemetria (rover_id, position, operational_status).
+        
+        COMO FUNCIONA:
+        - Recolhe métricas técnicas usando self.run(client)
+        - Combina com campos obrigatórios fornecidos ou valores padrão
+        - Retorna dicionário completo de telemetria
+        
+        PORQUÊ:
+        - Garante que mensagens de telemetria incluem tanto métricas técnicas quanto campos obrigatórios
+        - Facilita integração entre recolha de métricas e estrutura de telemetria
+        - Permite reutilizar métricas recolhidas em mensagens de telemetria
+        
+        Args:
+            client (NMS_Agent): Instância do cliente NMS_Agent para fazer medições
+            rover_id (str, optional): ID do rover. Se None, usa self.id
+            position (dict, optional): Posição {"x": float, "y": float, "z": float}. 
+                                      Se None, usa valores padrão
+            operational_status (str, optional): Estado operacional. Se None, usa "em missão"
+        
+        Returns:
+            dict: Dicionário com mensagem de telemetria completa
+        """
+        # Recolher métricas técnicas
+        metrics = self.run(client)
+        
+        # Usar valores fornecidos ou padrões
+        if rover_id is None:
+            rover_id = self.id
+        
+        if position is None:
+            position = {"x": 0.0, "y": 0.0, "z": 0.0}
+        
+        if operational_status is None:
+            operational_status = "em missão"
+        
+        # Criar estrutura de telemetria com campos obrigatórios
+        telemetry = {
+            "rover_id": rover_id,
+            "position": position,
+            "operational_status": operational_status
+        }
+        
+        # Adicionar métricas técnicas recolhidas
+        telemetry.update(metrics)
+        
+        return telemetry

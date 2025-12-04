@@ -57,5 +57,7 @@ client = NMS_Agent.NMS_Agent("10.0.4.10")  # Replace with your interface
 #print(client.getram())
 #print(client.getLatency("10.0.1.2"))
 
-client.sendTelemetry("10.0.4.10","alert_n1_task-202_1.json")
+# NOTA: Ficheiros alert_* devem usar sendMetrics() (MissionLink/UDP), não sendTelemetry() (TelemetryStream/TCP)
+# client.sendMetrics("10.0.4.10","alert_n1_task-202_1.json")  # Correto para alertas
+# client.sendTelemetry("10.0.4.10","telemetry_r1_1234567890.json")  # Correto para telemetria contínua
 #client.telemetryStream.endConnection()
