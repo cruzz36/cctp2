@@ -156,6 +156,15 @@ class NMS_Server:
         self.tasks = dict()
         self.pendingMissions = []  # Missões pendentes para atribuir quando rover solicitar
         self.missionProgress = dict()  # {mission_id: {rover_id: progress_data}}
+        
+        # Inicializar API de Observação
+        try:
+            from CC.tp2.API.ObservationAPI import ObservationAPI
+            self.observation_api = ObservationAPI(self, host='0.0.0.0', port=8082)
+        except ImportError as e:
+            print(f"Aviso: API de Observação não disponível: {e}")
+            print("Instale Flask com: pip install flask")
+            self.observation_api = None
 
 
     def recvTelemetry(self):
@@ -164,6 +173,16 @@ class NMS_Server:
         Executa em loop infinito.
         """
         self.telemetryStream.server()
+    
+    def startObservationAPI(self):
+        """
+        Inicia a API de Observação em thread separada.
+        Disponibiliza endpoints REST para consulta de estado do sistema.
+        """
+        if self.observation_api is not None:
+            self.observation_api.start()
+        else:
+            print("Aviso: API de Observação não disponível (Flask não instalado)")
 
     def recvMissionLink(self):
         """
