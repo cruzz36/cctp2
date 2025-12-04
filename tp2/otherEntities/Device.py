@@ -76,36 +76,54 @@ class Device:
         end = {}
         final = {}
         
+        # Bug fix: Usar parâmetro 'client' diretamente em vez de 'self.client' que nunca foi atribuído
         if self.metrics["cpu_usage"] == True:
-            final["cpu_usage"] = self.client.getcpu()
+            final["cpu_usage"] = client.getcpu()
         
+        # Bug fix: interfaceStatsCheckpoint() requer parâmetro 'interface'
         for a in self.metrics["interface_stats"]:
-            start[a] = self.client.interfaceStatsCheckpoint()
+            start[a] = client.interfaceStatsCheckpoint(a)
 
+        # Bug fix: Inicializar lista = None antes do bloco condicional
+        #          Se todas as condições de medição de bandwidth estiverem desativadas,
+        #          lista nunca será definida, causando NameError na linha 105
+        lista = None
         
         if (
             self.bandwidth["enabled"] == True or
             self.bandwidth["jitter"]["enabled"] == True or
             self.bandwidth["packet_loss"]["enabled"]  == True
         ):
-            lista = self.client.getBandwidth(self.bandwidth["server_address"])
+            # Bug fix: getBandwidth() requer 5 argumentos: serverip, role, duration, transport, frequency
+            #          Extrair todos os parâmetros do dicionário self.bandwidth
+            lista = client.getBandwidth(
+                self.bandwidth["server_address"],  # serverip
+                self.bandwidth["role"],            # role ("c" ou "s")
+                self.bandwidth["test_duration"],   # duration (segundos)
+                self.bandwidth["transport_type"],  # transport ("TCP" ou "UDP")
+                self.bandwidth["frequency"]       # frequency (segundos)
+            )
         
-        if self.bandwidth["enabled"] == True: final["bandwidth"] = lista[0]
-        if self.bandwidth["jitter"]["enabled"] == True: final["jitter"] = lista[1]
-        if self.bandwidth["packet_loss"]["enabled"]  == True: final["packet_loss"] = lista[2]
+        # Bug fix: getBandwidth() pode retornar None em caso de erro (linha 548 de NMS_Agent.py)
+        #          Verificar se lista não é None antes de aceder aos índices para evitar TypeError
+        if lista is not None:
+            if self.bandwidth["enabled"] == True: final["bandwidth"] = lista[0]
+            if self.bandwidth["jitter"]["enabled"] == True: final["jitter"] = lista[1]
+            if self.bandwidth["packet_loss"]["enabled"]  == True: final["packet_loss"] = lista[2]
 
         if self.latency["enabled"] == True:
-            final["latency"] = self.client.getLatency(self.latency["destination"],
+            final["latency"] = client.getLatency(self.latency["destination"],
                                                       self.latency["packet_count"],
                                                       self.latency["frequency"])
 
         if self.metrics["ram_usage"] == True:
-            final["ram_usage"] = self.client.getram()
+            final["ram_usage"] = client.getram()
 
+        # Bug fix: interfaceStatsCheckpoint() requer parâmetro 'interface'
         for a in self.metrics["interface_stats"]:
-            end[a] = self.client.interfaceStatsCheckpoint()
+            end[a] = client.interfaceStatsCheckpoint(a)
         
         for a in self.metrics["interface_stats"]:
-            final[a] = self.client.get_packet_rate(start[a],end[a])
+            final[a] = client.get_packet_rate(start[a],end[a])
 
         return final

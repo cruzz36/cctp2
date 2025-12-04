@@ -60,6 +60,7 @@ class MissionLink:
         self.sendMetrics = "M"       # Metrics: Rover envia métricas à Nave-Mãe
         self.requestMission = "Q"    # Request/Query: Rover solicita uma missão à Nave-Mãe
         self.reportProgress = "P"      # Progress: Rover reporta progresso de uma missão em execução
+        self.noneType = "N"           # None: ACK/FIN sem tipo de operação específico (codificado quando missionType=None)
         
         # ============================================================
         # FLAGS DE CONTROLO DO PROTOCOLO
@@ -154,8 +155,13 @@ class MissionLink:
         Returns:
             bytes: Mensagem formatada e codificada em bytes
         """
+        # Bug fix: Quando missionType=None, codificar como "N" apenas para ACKs/FINs
+        #          Para mensagens de dados, preservar o missionType original passado ao send()
+        #          Isto garante que quando o servidor envia missões com taskRequest ("T"),
+        #          o rover recebe "T" em vez de "N", permitindo roteamento correto do protocolo
         if missionType != None: 
             return f"{flag}|{idMission}|{seqNum}|{ackNum}|{len(message)}|{missionType}|{message}".encode()
+        # missionType=None é usado apenas para ACKs/FINs, codificar como "N"
         return f"{flag}|{idMission}|{seqNum}|{ackNum}|{len(message)}|N|{message}".encode()
         
 
@@ -209,6 +215,14 @@ class MissionLink:
                 try:
                     message, _ = self.sock.recvfrom(self.limit.buffersize)
                     lista = message.decode().split("|")
+                    # Bug fix: Verificar comprimento de lista antes de aceder a lista[flagPos]
+                    #          A validação de comprimento na linha 220 só acontece dentro do loop,
+                    #          mas o acesso inicial na linha 212 acontece antes do loop, causando IndexError
+                    #          se a primeira mensagem SYN-ACK recebida for malformada
+                    if len(lista) < 7:
+                        # Mensagem malformada - reenviar SYN e continuar
+                        retries += 1
+                        continue
                     while lista[flagPos] != self.synackkey:
                         self.sock.sendto(
                             f"{self.synkey}|{idAgent}|{seqinicial}|0|_|0|-.-".encode(),
@@ -277,7 +291,14 @@ class MissionLink:
         # Print de debug comentado - mostra primeira mensagem recebida
         # print(f"Message : {message}\nFrom : {ip}:{port}")
         lista = message.decode().split("|")
-        while lista[flagPos] != self.synkey:
+        # Bug fix: Validar comprimento de lista antes de aceder a lista[flagPos]
+        #          Se a mensagem for malformada (ex: apenas "S"), split retorna lista de 1 elemento
+        #          A condição do while será falsa e o código prossegue para linha 298 onde lista[1] é acedido,
+        #          causando IndexError. A validação na linha 294 só corre dentro do while loop.
+        if len(lista) < 7:
+            # Mensagem malformada - continuar loop para receber próxima mensagem
+            lista = []  # Garantir que lista[flagPos] falhe na verificação
+        while len(lista) < 7 or lista[flagPos] != self.synkey:
             message,(ip,port) = self.sock.recvfrom(self.limit.buffersize)
             # Mensagem inválida recebida - ignorar e continuar
             # print(f"Message : {message}\nFrom : {ip}:{port}")  # Debug: descomentar para troubleshooting
@@ -333,6 +354,10 @@ class MissionLink:
         Returns:
             bool: True se a mensagem foi enviada com sucesso
         """
+        # Bug fix: Garantir que message é string antes de chamar métodos de string
+        if not isinstance(message, str):
+            message = str(message)
+        
         # The connection starts with an handshake to assure it has a somewhat reliable 
         # transfers between the client and the server 
         _,idAgent,seq,ack = self.startConnection(idAgent,ip,port)
@@ -354,7 +379,8 @@ class MissionLink:
                         responseIp == ip and
                         responsePort == port and
                         lista[flagPos] == self.ackkey and
-                        lista[ackPos] == str(seq)
+                        lista[ackPos] == str(seq) and
+                        lista[idMissionPos] == idMission  # Validação de segurança: verifica idMission
                     ):
                         seq += 1
                         ack = seq
@@ -378,11 +404,17 @@ class MissionLink:
                     try:
                         text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
                         lista = text.decode().split("|")
+                        # Bug fix: Validar formato da mensagem antes de aceder a índices
+                        if len(lista) < 7:
+                            # Mensagem malformada - retransmitir chunk
+                            self.sock.sendto(self.formatMessage(missionType,self.datakey,idMission,seq,ack,buffer),(ip,port))
+                            continue
                         if(
                             responseIp == ip and
                             responsePort == port and
                             lista[flagPos] == self.ackkey and
-                            lista[ackPos] == str(seq)
+                            lista[ackPos] == str(seq) and
+                            lista[idMissionPos] == idMission  # Validação de segurança: verifica idMission
                         ):
                             seq += 1
                             ack = seq
@@ -406,7 +438,8 @@ class MissionLink:
                         responseIp == ip and
                         responsePort == port and
                         lista[ackPos] == str(seq) and
-                        lista[flagPos] == self.finkey
+                        lista[flagPos] == self.finkey and
+                        lista[idMissionPos] == idMission  # Validação de segurança: verifica idMission
                     ):
                         seq += 1
                         ack = seq
@@ -428,11 +461,17 @@ class MissionLink:
                     try:
                         text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
                         lista = text.decode().split("|")
+                        # Bug fix: Validar formato da mensagem antes de aceder a índices
+                        if len(lista) < 7:
+                            # Mensagem malformada - retransmitir mensagem
+                            self.sock.sendto(self.formatMessage(missionType,self.datakey,idMission,seq,ack,chunks),(ip,port))
+                            continue
                         #print(lista)
                         if (responseIp == ip and
                             responsePort == port and
                             lista[ackPos] == str(seq) and 
-                            lista[flagPos] == self.ackkey
+                            lista[flagPos] == self.ackkey and
+                            lista[idMissionPos] == idMission  # Validação de segurança: verifica idMission
                             ):
                             seq += 1
                             ack = seq
@@ -456,11 +495,15 @@ class MissionLink:
                                     ):
                                         if lista[flagPos] == self.finkey:
                                             # Recebeu FIN do outro lado - responder com ACK e terminar
+                                            # Bug fix: Deve reconhecer o número de sequência do FIN recebido (lista[seqPos])
+                                            #          e incrementar o nosso próprio seq para o próximo pacote
                                             seq += 1
-                                            ack = seq
+                                            ack = int(lista[seqPos])  # Reconhecer o seq do FIN recebido
                                             self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                                             return True
-                                        elif lista[flagPos] == self.ackkey and lista[ackPos] == str(seq):
+                                        elif (lista[flagPos] == self.ackkey and 
+                                              lista[ackPos] == str(seq) and
+                                              lista[idMissionPos] == idMission):  # Validação de segurança: verifica idMission
                                             # Recebeu ACK do FIN enviado - agora esperar FIN do outro lado
                                             # Continuar loop para aguardar FIN
                                             continue
@@ -498,7 +541,8 @@ class MissionLink:
                         responseIp == ip and
                         responsePort == port and
                         lista[ackPos] == str(seq) and 
-                        lista[flagPos] == self.ackkey
+                        lista[flagPos] == self.ackkey and
+                        lista[idMissionPos] == idMission  # Validação de segurança: verifica idMission
                     ):
                         seq += 1
                         ack = seq
@@ -529,10 +573,16 @@ class MissionLink:
                         responseIp == ip and
                         responsePort == port and
                         lista[ackPos] == str(seq) and
-                        lista[flagPos] == self.finkey
+                        lista[flagPos] == self.finkey and
+                        lista[idMissionPos] == idMission  # Validação de segurança: verifica idMission
                     ):
                         return True                  
-                except TimeoutError:
+                # Bug fix: Socket operations raise socket.timeout, not TimeoutError
+                #          Todos os outros timeout handlers neste ficheiro usam socket.timeout corretamente
+                #          (linhas 238, 257, 325, 383, etc.). Esta inconsistência significa que timeouts
+                #          durante a troca de FIN não serão tratados, causando exceções não tratadas
+                #          e falhas de conexão em vez de retransmitir o pacote FIN
+                except socket.timeout:
                     self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                     
                 
@@ -573,12 +623,25 @@ class MissionLink:
                     # Mensagem malformada - ignorar e continuar
                     firstMessage = None
                     continue
+                # Bug fix: Extrair idMission apenas quando a validação de IP/porta/seq passar
+                #          Se extrairmos idMission de uma mensagem com formato válido mas IP/porta/seq incorretos,
+                #          podemos extrair o idMission errado de um emissor diferente, causando rejeição de mensagens válidas
+                #          Solução: Extrair idMission apenas quando a validação completa passar (IP/porta/seq corretos)
+                #          Isto garante que idMission seja sempre do emissor correto
                 if (
                     ip == ipDest and 
                     port == portDest and
                     lista[seqPos] == str(seq + 1)
                 ):
-                    idMission = lista[idMissionPos]  # Extrai idMission da primeira mensagem
+                    # Extrair idMission apenas quando validação completa passar
+                    if idMission is None:
+                        idMission = lista[idMissionPos]  # Extrai idMission da primeira mensagem válida
+                    # Bug fix: missionType deve ser atualizado sempre que uma mensagem válida é recebida
+                    #          Se a primeira mensagem falhar na validação (linhas 615-619), missionType permanece ""
+                    #          e quando o método retorna (linha 727 ou 816), passa "" em vez do tipo de mensagem real
+                    #          causando identificação incorreta do tipo de mensagem no código de chamada
+                    #          (ex: if lista[2] == self.missionLink.taskRequest falhará mesmo que uma mensagem tenha sido recebida)
+                    #          Solução: missionType é atualizado aqui quando uma mensagem válida é finalmente recebida
                     missionType = lista[missionTypePos]
                     seq += 1
                     ack = seq
@@ -590,6 +653,12 @@ class MissionLink:
                         firstMessage = lista[messagePos]
                     self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                     break
+                else:
+                    # Bug fix: Se validação falhar, resetar firstMessage para None
+                    #          mas NÃO resetar missionType - ele será atualizado quando uma mensagem válida for recebida
+                    #          O problema é que missionType permanece "" se a primeira mensagem falhar,
+                    #          mas isso é correto porque ainda não recebemos uma mensagem válida
+                    firstMessage = None
             except socket.timeout:
                 #print("Timed out on the first message")
                 firstMessage = None
@@ -599,12 +668,24 @@ class MissionLink:
                 firstMessage = None
                 continue
 
-        # firstMessage pode ser string (mensagem) ou None (ficheiro)
-        # Se for string, usar como prevMessage; se for None, prevMessage será None
+        # firstMessage pode ser string (mensagem), None (ficheiro), ou bytes (se validação falhou)
+        # Bug fix: Garantir que prevMessage é sempre string ou None, nunca bytes
+        # Se for string, usar como prevMessage; se for None ou bytes, prevMessage será None
         # NOTA: Se fileName foi definido, firstMessage será None (é ficheiro, não mensagem)
-        prevMessage = firstMessage if (isinstance(firstMessage, str) and fileName is None) else None
+        if isinstance(firstMessage, str) and fileName is None:
+            prevMessage = firstMessage
+        else:
+            prevMessage = None
 
         if fileName == None:
+            # Bug fix: Se firstMessage contém o primeiro chunk, concatená-lo imediatamente
+            #          para evitar perder o primeiro chunk em mensagens multi-chunk
+            if prevMessage is not None:
+                message = prevMessage
+                prevMessage = None  # Reset para usar estratégia de escrita atrasada
+            else:
+                message = ""
+            
             # Catch packets until the fin packet arrives
             while True:
                 # Try to receive a packet until timeout
@@ -615,17 +696,26 @@ class MissionLink:
                     # print(f"EXPECTING - {ack + 1}\nRECEIVED - {lista[seqPos]}")
                     # When receiving a packet, the packet is accepted if:
                     # the length of the list is 7
-                    # the mission id matches the connection's mission
+                    # the mission id matches the connection's mission (se idMission já foi extraído)
                     # the seq is greater 1 unit the whats stored on receiver side
                     # the IP address and Port must be the same (identifica o rover)
+                    # Bug fix: Verificar se idMission não é None antes de comparar
+                    #          Se a primeira mensagem falhar na validação, idMission permanece None
+                    #          e a comparação lista[idMissionPos] == idMission falhará para mensagens válidas
                     if(
                         len(lista) == 7 and
-                        lista[idMissionPos] == idMission and
+                        (idMission is None or lista[idMissionPos] == idMission) and
                         lista[seqPos] == str(seq + 1) and
                         ipDest == ip and
                         port == portDest
                     ):
-                        message += prevMessage
+                        # Se idMission ainda não foi extraído, extrair agora (primeira mensagem válida)
+                        if idMission is None:
+                            idMission = lista[idMissionPos]
+                        # Estratégia anti-duplicação: escrever chunk anterior quando próximo chega
+                        # Previne duplicação em caso de retransmissão
+                        if prevMessage is not None:
+                            message += prevMessage
                         prevMessage = lista[messagePos]
 
                         # Increase the seq num to the new value (+1)
@@ -637,6 +727,10 @@ class MissionLink:
 
                         #Check if the client send a connection closing message
                         if lista[flagPos] == self.finkey:
+                            # Bug fix: Concatenar último chunk (prevMessage) antes de fechar conexão
+                            #          para evitar perder o último chunk da mensagem
+                            if prevMessage is not None:
+                                message += prevMessage
                             # Prints de debug comentados - útil para troubleshooting
                             # DEVERIAM estar ativos durante desenvolvimento/debug
                             # print(lista)
@@ -667,7 +761,9 @@ class MissionLink:
                                     self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                                     continue
                         # Enviar ACK do chunk recebido
-                        self.sock.sendto(self.formatMessage(lista[missionTypePos],self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
+                        # Bug fix: ACK deve ter missionType=None, não o missionType do chunk recebido
+                        #          Todos os outros ACKs no código usam None corretamente
+                        self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                     
 
 
@@ -720,7 +816,10 @@ class MissionLink:
                                 file.write(previous)
                             
                             if lista[flagPos] == self.finkey:
-                                # Escrever último chunk se houver (já escrito acima se previous != None)
+                                # Bug fix: Escrever último chunk que está em lista[messagePos] quando recebe FIN
+                                #          O chunk final nunca era escrito, apenas previous (penúltimo chunk)
+                                if lista[messagePos] != self.eofkey:
+                                    file.write(lista[messagePos])
                                 # Ficheiro será fechado automaticamente pelo with
                                 self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                                 while True:
@@ -728,12 +827,14 @@ class MissionLink:
                                         text,(ip,port) = self.sock.recvfrom(self.limit.buffersize)
                                         lista = text.decode().split("|")
                                         # Validação do pacote FIN recebido
+                                        # Bug fix: Deve verificar lista[ackPos] == str(seq) para validar que o FIN recebido
+                                        #          está a reconhecer o nosso número de sequência FIN (consistente com linha 701 e 419)
                                         if(
                                             len(lista) == 7 and
                                             ip == ipDest and
                                             port == portDest and 
                                             lista[idMissionPos] == idMission and
-                                            lista[seqPos] == str(seq) and
+                                            lista[ackPos] == str(seq) and
                                             lista[flagPos] == self.finkey
                                         ):
                                             # Ficheiro recebido e conexão fechada

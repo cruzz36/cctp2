@@ -180,8 +180,24 @@ class NMS_Server:
 
         if missionType == self.missionLink.sendMetrics:  # "M"
             # Rover envia métricas (nome de ficheiro JSON)
-            iter = message.split("_")[3].split(".")[0]
-            self.missionLink.send(ip,self.missionLink.port,self.missionLink.ackkey,idAgent,idMission,iter)
+            # Bug fix: Validar formato do nome do ficheiro antes de fazer split
+            try:
+                parts = message.split("_")
+                if len(parts) >= 4:
+                    iter = parts[3].split(".")[0]
+                else:
+                    # Formato inválido - usar valor padrão ou mensagem de erro
+                    iter = "unknown"
+                    print(f"Aviso: Formato de nome de ficheiro inválido: {message}")
+            except (IndexError, AttributeError) as e:
+                print(f"Erro ao processar nome de ficheiro de métricas: {e}")
+                iter = "error"
+            # Bug fix: ackkey é uma flag, não um missionType
+            # O método send() não é apropriado para enviar apenas ACKs - ele faz handshake completo
+            # Para enviar ACK com mensagem, devemos usar formatMessage diretamente ou criar método específico
+            # Por agora, usamos None como missionType (send() internamente usará datakey como flag)
+            # NOTA: Idealmente, deveria haver um método sendACK() separado, mas para compatibilidade usamos send()
+            self.missionLink.send(ip,self.missionLink.port,None,idAgent,idMission,iter)
             return
 
         if missionType == self.missionLink.requestMission:  # "Q"
@@ -212,16 +228,26 @@ class NMS_Server:
         self.missionLink.send(ip,self.missionLink.port,self.missionLink.taskRequest,idAgent,idMission,task)
         lista = self.missionLink.recv()
         # lista agora tem: [idAgent, idMission, missionType, message, ip]
+        # Bug fix: usar 'or' em vez de 'and' - retransmitir se QUALQUER validação falhar
+        # Bug fix: Removido loop interno redundante que comparava lista[3] != task incorretamente
+        #          lista[3] é a mensagem recebida (string), task pode ser dict/string, comparação não faz sentido
+        # Bug fix: lista[2] é missionType, não flag. Quando cliente envia ACK, missionType será None
+        #          Verificar se missionType é None (confirmação) ou verificar mensagem de confirmação
+        # Bug fix: Adicionar limite de retries para evitar loops infinitos (consistente com sendMission, sendMetrics, register)
+        retries = 0
+        max_retries = 10
         while (
-            lista[0] != idAgent and
-            lista[2] != self.missionLink.ackkey and
-            lista[4] != ip
+            (lista[0] != idAgent or
+            lista[2] is not None or  # missionType deve ser None para ACK de confirmação
+            lista[4] != ip) and
+            retries < max_retries
         ):
+            retries += 1
             self.missionLink.send(ip,self.missionLink.port,self.missionLink.taskRequest,idAgent,idMission,task)
             lista = self.missionLink.recv()
-            while lista[3] != task:
-                self.missionLink.send(ip,self.missionLink.port,self.missionLink.taskRequest,idAgent,idMission,task)
-                lista = self.missionLink.recv()
+        
+        if retries >= max_retries:
+            print(f"Aviso: Máximo de tentativas ({max_retries}) atingido ao enviar tarefa para {idAgent}")
 
     def sendMission(self, ip, idAgent, mission_data):
         """
@@ -283,9 +309,12 @@ class NMS_Server:
         max_retries = 5
         
         while retries < max_retries:
+            # Bug fix: lista[2] é missionType, não flag. Quando cliente envia com missionType=None, é codificado como "N"
+            #          O recv() extrai isto como a string "N", não Python None
+            #          Verificar lista[2] == "N" em vez de lista[2] is None
             if (
                 lista[0] == idAgent and
-                lista[2] == self.missionLink.ackkey and
+                lista[2] == self.missionLink.noneType and  # missionType deve ser "N" para ACK de confirmação
                 lista[4] == ip
             ):
                 # Confirmação recebida
@@ -312,10 +341,12 @@ class NMS_Server:
         if self.agents.get(idAgent) == None:
             self.agents[idAgent] = ip
             # No registo, idMission = "000" porque ainda não há missão atribuída
-            self.missionLink.send(ip,self.missionLink.port,self.missionLink.ackkey,idAgent,"000","Registered")
+            # Bug fix: ackkey é uma flag, não um missionType. Usar None como missionType
+            self.missionLink.send(ip,self.missionLink.port,None,idAgent,"000","Registered")
             #print(self.agents[idAgent])
             return
-        self.missionLink.send(ip,self.missionLink.port,self.missionLink.ackkey,idAgent,"000","Already registered")
+        # Bug fix: ackkey é uma flag, não um missionType. Usar None como missionType
+        self.missionLink.send(ip,self.missionLink.port,None,idAgent,"000","Already registered")
         #print("Already Registered")
 
 
@@ -338,8 +369,17 @@ class NMS_Server:
             self.tasks[taskid] = json.dumps(a)
             agentsToSend = a["devices"]
             for agent in agentsToSend:
+                # Bug fix: Verificar se agente está registado antes de enviar
+                agent_ip = self.agents.get(agent["device_id"])
+                if agent_ip is None:
+                    print(f"Aviso: Agente {agent['device_id']} não está registado. Ignorando envio de tarefa.")
+                    continue
+                
+                # Bug fix: Converter dict para JSON string antes de enviar
+                #          send() espera string e chama message.endswith(".json")
+                agent_json = json.dumps(agent)
                 # Envia tarefa com idAgent=agent["device_id"] e idMission=taskid
-                self.missionLink.send(self.agents.get(agent["device_id"]),self.missionLink.port,self.missionLink.taskRequest,agent["device_id"],taskid,agent)
+                self.missionLink.send(agent_ip,self.missionLink.port,self.missionLink.taskRequest,agent["device_id"],taskid,agent_json)
                 #print(f"Agent {agent['device_id']} Parsed and sent")
         print("File Parsed")
 
@@ -448,7 +488,8 @@ class NMS_Server:
                 self.pendingMissions.insert(0, mission)
         else:
             # Sem missão disponível - enviar ACK indicando isso
-            self.missionLink.send(ip, self.missionLink.port, self.missionLink.ackkey, idAgent, "000", "no_mission")
+            # Bug fix: ackkey é uma flag, não um missionType. Usar None como missionType
+            self.missionLink.send(ip, self.missionLink.port, None, idAgent, "000", "no_mission")
             print(f"Rover {idAgent} solicitou missão, mas não há missões disponíveis")
 
     def handleMissionProgress(self, idAgent, idMission, progress_json, ip):
@@ -477,14 +518,17 @@ class NMS_Server:
             print(f"Progresso da missão {idMission} (rover {idAgent}): {progress_percent}% - {status}")
             
             # Enviar confirmação
-            self.missionLink.send(ip, self.missionLink.port, self.missionLink.ackkey, idAgent, idMission, "progress_received")
+            # Bug fix: ackkey é uma flag, não um missionType. Usar None como missionType
+            self.missionLink.send(ip, self.missionLink.port, None, idAgent, idMission, "progress_received")
             
         except json.JSONDecodeError as e:
             print(f"Erro ao fazer parse do progresso: {e}")
-            self.missionLink.send(ip, self.missionLink.port, self.missionLink.ackkey, idAgent, idMission, "parse_error")
+            # Bug fix: ackkey é uma flag, não um missionType. Usar None como missionType
+            self.missionLink.send(ip, self.missionLink.port, None, idAgent, idMission, "parse_error")
         except Exception as e:
             print(f"Erro ao processar progresso: {e}")
-            self.missionLink.send(ip, self.missionLink.port, self.missionLink.ackkey, idAgent, idMission, "error")
+            # Bug fix: ackkey é uma flag, não um missionType. Usar None como missionType
+            self.missionLink.send(ip, self.missionLink.port, None, idAgent, idMission, "error")
 
     def addPendingMission(self, mission):
         """

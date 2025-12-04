@@ -153,14 +153,41 @@ class NMS_Agent:
             ip (str): Endereço IP da Nave-Mãe
             filename (str): Nome do ficheiro de métricas a enviar (formato: alert_idMission_task-XXX_iter.json)
         """
-        lista = filename.split("_")
-        iter = lista[3].split(".")[0]
-        idMission = lista[2]
+        # Bug fix: Validar formato do nome do ficheiro antes de fazer split
+        try:
+            lista = filename.split("_")
+            if len(lista) >= 4:
+                iter = lista[3].split(".")[0]
+                # Bug fix: Formato é alert_idMission_task-XXX_iter.json
+                #          Split por "_" dá: [0]="alert", [1]=idMission, [2]="task-XXX", [3]="iter.json"
+                #          idMission está no índice 1, não 2
+                idMission = lista[1]
+            else:
+                # Formato inválido - usar valores padrão
+                print(f"Erro: Formato de nome de ficheiro inválido: {filename}. Esperado: alert_idMission_task-XXX_iter.json")
+                iter = "unknown"
+                idMission = "000"
+        except (IndexError, AttributeError) as e:
+            print(f"Erro ao processar nome de ficheiro de métricas: {e}")
+            iter = "error"
+            idMission = "000"
         self.missionLink.send(ip,self.missionLink.port,self.missionLink.sendMetrics,self.id,idMission,filename)
         reply = self.missionLink.recv()
-        while reply[2] != self.missionLink.ackkey and reply[3] != iter:
+        # Bug fix: reply[2] é missionType (não flag), reply[3] é message (contém iter)
+        # Quando servidor envia ACK, missionType será None ou vazio, message será iter
+        # Validação correta: verificar se message (reply[3]) contém o iter esperado
+        # E verificar se recebemos resposta do servidor correto (reply[4] == ip)
+        # Usar 'or' porque retransmitir se QUALQUER validação falhar (iter incorreto OU IP incorreto)
+        # Bug fix: Adicionar limite de retries para evitar loops infinitos
+        retries = 0
+        max_retries = 10
+        while (reply[3] != iter or reply[4] != ip) and retries < max_retries:
+            retries += 1
             self.missionLink.send(ip,self.missionLink.port,self.missionLink.sendMetrics,self.id,idMission,filename)
             reply = self.missionLink.recv()
+        
+        if retries >= max_retries:
+            print(f"Aviso: Máximo de tentativas ({max_retries}) atingido ao enviar métricas")
             
     def register(self,ip):
         """
@@ -173,9 +200,20 @@ class NMS_Agent:
         # No registo, idMission = "000" porque ainda não há missão atribuída
         self.missionLink.send(ip,self.missionLink.port,self.missionLink.registerAgent,self.id,"000","\0")
         lista = self.missionLink.recv()
-        while lista[2] != self.missionLink.ackkey and lista[0] != self.id:
+        # Bug fix: lista[2] é missionType (não flag), lista[0] é idAgent
+        # Quando servidor envia confirmação de registo, missionType será None ou vazio
+        # Validação correta: verificar se idAgent corresponde e se recebemos resposta do servidor correto
+        # Bug fix: Usar 'or' está correto - retransmitir se QUALQUER validação falhar
+        #          Mas vamos adicionar um limite de retries para evitar loops infinitos
+        retries = 0
+        max_retries = 10
+        while (lista[0] != self.id or lista[4] != ip) and retries < max_retries:
+            retries += 1
             self.missionLink.send(ip,self.missionLink.port,self.missionLink.registerAgent,self.id,"000","\0")
             lista = self.missionLink.recv()
+        
+        if retries >= max_retries:
+            print(f"Aviso: Máximo de tentativas ({max_retries}) atingido ao registar")
 
 
     def requestMission(self, ip):
@@ -195,12 +233,52 @@ class NMS_Agent:
         # Aguardar resposta (pode ser missão ou mensagem de "sem missão disponível")
         try:
             response = self.missionLink.recv()
+            # response tem: [idAgent, idMission, missionType, message, ip]
             if response[2] == self.missionLink.taskRequest:
-                # Missão recebida - processar
-                return self.recvMissionLink()
-            elif response[2] == self.missionLink.ackkey:
-                # Sem missão disponível
-                print("Nave-Mãe respondeu: sem missão disponível no momento")
+                # Bug fix: Missão já está na primeira resposta (response[3])
+                #          Não fazer recv() novamente - extrair e validar diretamente
+                mission_message = response[3]
+                mission_id = response[1]  # idMission do protocolo
+                
+                # Validar formato da missão
+                is_valid, error_msg = validateMission(mission_message)
+                
+                if not is_valid:
+                    print(f"Erro: Missão recebida é inválida: {error_msg}")
+                    # Enviar ACK mesmo assim para não bloquear o servidor
+                    self.missionLink.send(response[4], self.missionLink.port, None, self.id, mission_id, "invalid")
+                    return None
+                
+                # Parse do JSON da missão
+                try:
+                    if isinstance(mission_message, str):
+                        mission_data = json.loads(mission_message)
+                    else:
+                        mission_data = mission_message
+                except json.JSONDecodeError as e:
+                    print(f"Erro: Não foi possível fazer parse do JSON da missão: {e}")
+                    self.missionLink.send(response[4], self.missionLink.port, None, self.id, mission_id, "parse_error")
+                    return None
+                
+                # Verificar se o rover_id corresponde
+                if mission_data.get("rover_id") != self.id:
+                    print(f"Aviso: Missão {mission_id} destinada a outro rover ({mission_data.get('rover_id')})")
+                    # Continuar mesmo assim - pode ser útil para debug
+                
+                # Armazenar missão validada
+                self.tasks[mission_id] = mission_data
+                
+                # Enviar ACK de confirmação
+                self.missionLink.send(response[4], self.missionLink.port, None, self.id, mission_id, mission_id)
+                
+                return mission_data
+            elif response[2] == self.missionLink.noneType:
+                # Bug fix: Quando servidor envia com missionType=None, é codificado como "N" no protocolo
+                #          O recv() extrai isto como a string "N", não Python None
+                #          Verificar response[2] == "N" em vez de response[2] is None
+                # Sem missão disponível (mensagem será "no_mission")
+                if response[3] == "no_mission":
+                    print("Nave-Mãe respondeu: sem missão disponível no momento")
                 return None
         except Exception as e:
             print(f"Erro ao solicitar missão: {e}")
@@ -245,7 +323,8 @@ class NMS_Agent:
             if not is_valid:
                 print(f"Erro: Missão recebida é inválida: {error_msg}")
                 # Enviar ACK mesmo assim para não bloquear o servidor
-                self.missionLink.send(lista[4], self.missionLink.port, self.missionLink.ackkey, self.id, mission_id, "invalid")
+                # Bug fix: ackkey é uma flag, não um missionType. Usar None como missionType
+                self.missionLink.send(lista[4], self.missionLink.port, None, self.id, mission_id, "invalid")
                 return None
             
             # Parse do JSON da missão
@@ -256,7 +335,8 @@ class NMS_Agent:
                     mission_data = mission_message
             except json.JSONDecodeError as e:
                 print(f"Erro: Não foi possível fazer parse do JSON da missão: {e}")
-                self.missionLink.send(lista[4], self.missionLink.port, self.missionLink.ackkey, self.id, mission_id, "parse_error")
+                # Bug fix: ackkey é uma flag, não um missionType. Usar None como missionType
+                self.missionLink.send(lista[4], self.missionLink.port, None, self.id, mission_id, "parse_error")
                 return None
             
             # Verificar se o rover_id corresponde
@@ -276,7 +356,8 @@ class NMS_Agent:
             print(f"  Área geográfica: ({mission_data['geographic_area'].get('x1')}, {mission_data['geographic_area'].get('y1')}) a ({mission_data['geographic_area'].get('x2')}, {mission_data['geographic_area'].get('y2')})")
             
             # Enviar ACK de confirmação
-            self.missionLink.send(lista[4], self.missionLink.port, self.missionLink.ackkey, self.id, mission_id, mission_id)
+            # Bug fix: ackkey é uma flag, não um missionType. Usar None como missionType
+            self.missionLink.send(lista[4], self.missionLink.port, None, self.id, mission_id, mission_id)
             
             return mission_data
         
@@ -330,11 +411,14 @@ class NMS_Agent:
             
             # Aguardar confirmação
             response = self.missionLink.recv()
-            if response[2] == self.missionLink.ackkey:
+            # Bug fix: Quando servidor envia com missionType=None, é codificado como "N" no protocolo
+            #          O recv() extrai isto como a string "N", não Python None
+            #          Verificar response[2] == "N" em vez de response[2] is None
+            if response[2] == self.missionLink.noneType and response[3] in ["progress_received", "Registered", "Already registered"]:
                 print(f"Progresso da missão {mission_id} reportado com sucesso")
                 return True
             else:
-                print(f"Falha ao reportar progresso: resposta inesperada")
+                print(f"Falha ao reportar progresso: resposta inesperada (missionType={response[2]}, message={response[3]})")
                 return False
         except Exception as e:
             print(f"Erro ao reportar progresso: {e}")
