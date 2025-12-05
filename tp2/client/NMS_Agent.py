@@ -1,10 +1,7 @@
 import socket
 from protocol import MissionLink,TelemetryStream
-from otherEntities import Device
 import os
-import subprocess
 import time
-import psutil  # type: ignore  # Instalar com: pip install psutil
 import json
 
 def validateMission(mission_data):
@@ -215,7 +212,6 @@ class NMS_Agent:
         self.telemetry_thread = None  # Thread para monitorização contínua
         self.telemetry_running = False  # Flag para controlar loop
         self.telemetry_interval = 30  # Intervalo padrão em segundos
-        self.devices = []  # Lista de dispositivos para recolher métricas
 
     # def sendMetrics(self,ip,filename:str):
     #     """
@@ -519,7 +515,6 @@ class NMS_Agent:
         COMO FUNCIONA:
         - Combina campos obrigatórios (rover_id, position, operational_status)
         - Adiciona campos opcionais (battery, velocity, temperature, etc.)
-        - Inclui métricas técnicas recolhidas pelo Device.run()
         - Valida estrutura antes de retornar
         
         PORQUÊ:
@@ -691,24 +686,14 @@ class NMS_Agent:
         # Normalizar para 0-360
         self.direction = float(direction) % 360.0
     
-    def setDevices(self, devices):
-        """
-        Define a lista de dispositivos para recolha de métricas.
-        
-        Args:
-            devices (list): Lista de objetos Device para recolher métricas
-        """
-        self.devices = devices
-    
-    def startContinuousTelemetry(self, server_ip, interval_seconds=30, devices=None):
+    def startContinuousTelemetry(self, server_ip, interval_seconds=30):
         """
         Inicia monitorização contínua de telemetria.
         Envia telemetria periodicamente em thread separada.
         
         COMO FUNCIONA:
         - Cria thread separada para não bloquear execução principal
-        - Em loop, recolhe métricas dos dispositivos (se fornecidos)
-        - Cria e envia telemetria com frequência definida
+        - Em loop, cria e envia telemetria com frequência definida
         - Continua até ser parado com stopContinuousTelemetry()
         
         PORQUÊ:
@@ -719,8 +704,6 @@ class NMS_Agent:
         Args:
             server_ip (str): Endereço IP da Nave-Mãe
             interval_seconds (int, optional): Intervalo entre envios em segundos. Defaults to 30
-            devices (list, optional): Lista de objetos Device para recolher métricas.
-                                    Se None, usa self.devices
         
         Returns:
             bool: True se monitorização foi iniciada, False se já estava em execução
@@ -731,9 +714,6 @@ class NMS_Agent:
             print("Aviso: Monitorização contínua já está em execução")
             return False
         
-        if devices is not None:
-            self.devices = devices
-        
         self.telemetry_interval = interval_seconds
         self.telemetry_running = True
         
@@ -743,23 +723,8 @@ class NMS_Agent:
             while self.telemetry_running:
                 try:
                     iteration += 1
-                    
-                    # Recolher métricas de todos os dispositivos se disponíveis
-                    all_metrics = {}
-                    if self.devices:
-                        for device in self.devices:
-                            try:
-                                device_metrics = device.run(self)
-                                # Combinar métricas (evitar sobrescrever)
-                                for key, value in device_metrics.items():
-                                    if key not in all_metrics:
-                                        all_metrics[key] = value
-                            except Exception as e:
-                                print(f"Erro ao recolher métricas do dispositivo {device.id}: {e}")
-                    
-                    # Criar e enviar telemetria
                     filename = f"telemetry_{self.id}_{int(time.time())}.json"
-                    success = self.createAndSendTelemetry(server_ip, all_metrics, filename)
+                    success = self.createAndSendTelemetry(server_ip, None, filename)
                     
                     if success:
                         print(f"[Telemetria {iteration}] Enviada com sucesso para {server_ip}")
@@ -821,169 +786,6 @@ class NMS_Agent:
         """
         return self.telemetry_running
     
-    def parseFile(self,file):
-        """
-        Faz parse de um ficheiro de configuração e cria objetos Device.
-        
-        Args:
-            file (str): Caminho do ficheiro de configuração
-        """
-        self.devices = Device.Device(file)
-
-    def getBandwidth(self,serverip,role,duration,transport,frequency):
-        """
-        Mede largura de banda, jitter e perda de pacotes usando iperf.
-        
-        Args:
-            serverip (str): Endereço IP do servidor iperf
-            role (str): Papel no teste ('c' para cliente, 's' para servidor)
-            duration (int): Duração do teste em segundos
-            transport (str): Tipo de transporte ('UDP' ou 'TCP')
-            frequency (int): Frequência/intervalo do teste
-            
-        Returns:
-            list or None: Lista com [bandwidth, jitter, packet_loss] ou None em caso de erro
-        """
-
-        try:
-            if transport == "UDP" :
-                output = os.popen(f"iperf -{role} {serverip} -u -t {frequency} -i {frequency}").read()
-            else: output = os.popen(f"iperf -{role} -t {duration} -i {frequency}")
-
-
-            # Separar output em linhas
-            items = output.split("\n")
-
-            # Remover os casos em que existem dois espaços consecutivos
-            items.remove("")
-
-            try:
-                print("Retornou in order")
-                # Apenas obter a ultima linha
-                final = items[-1]
-
-
-                # Da ultima linha reter os elementos posteriores à posição 9
-                final = final.split(" ")[11:]
-
-                # Remover possiveis caracteres nulos
-                while True:
-                    try:
-                        final.remove("")
-                    except:
-                        break
-
-
-                # Remover o numero de pacotes enviados
-                final.pop(len(final) - 2)
-                final.pop(len(final) - 2)
-
-                final[0] = " ".join(final[0:2])
-                final.pop(1)
-
-                final[1] = " ".join(final[1:3])
-                final.pop(len(final)-2)
-
-                # Inverter a lista para obter a disposicao desejada 
-                return final
-            except:
-                print("Return out of order")
-                final = items[-2]
-
-                final = final.split(" ")[11:]
-
-                while True:
-                    try:
-                        final.remove("")
-                    except:
-                        break 
-
-                final.pop(len(final) - 2)
-                final.pop(len(final) - 2)
-
-                final[0] = " ".join(final[0:2])
-                final.pop(1)
-
-                final[1] = " ".join(final[1:3])
-                final.pop(len(final)-2)
-
-                return final
-        except:
-            return None
-
-
-    def getLatency(self,address,packetCount = 3,interval = 1):
-        """
-        Mede a latência (RTT) usando o comando ping.
-        
-        Args:
-            address (str): Endereço IP ou hostname para fazer ping
-            packetCount (int, optional): Número de pacotes a enviar. Defaults to 3
-            interval (int, optional): Intervalo entre pacotes em segundos. Defaults to 1
-            
-        Returns:
-            str: Latência média em milissegundos (extraída do output do ping)
-        """
-
-        output = os.popen(f"ping {address} -c {packetCount} -i {interval} -W {self.frequency}").read()
-
-        # Separar output em linhas
-        items = output.split("\n")
-
-        # Remover os casos em que existem dois espaços consecutivos
-        while True:
-            try:
-                items.remove("")
-            except:
-                break
-
-        # Apenas obter as 2 primeiras linhas
-        items.reverse()
-        items = items[0:2]
-
-        final = items[0]
-        final = final.split(" ")
-        final = final[3:]
-        aux = final[0].split("/")[1]
-
-        return aux
-        
-    def getcpu(self):
-        """
-        Obtém o percentual de utilização da CPU.
-        
-        Returns:
-            float: Percentual de CPU utilizado (0-100)
-        """
-        return psutil.cpu_percent()
-    
-    def getram(self):
-        """
-        Obtém o percentual de utilização da RAM.
-        
-        Returns:
-            float: Percentual de RAM utilizada (0-100)
-        """
-        return psutil.virtual_memory()[2]
-
-    def getinterfacesNames(self,interfaces):
-        """
-        Extrai os nomes das interfaces de rede de uma lista de interfaces.
-        
-        Args:
-            interfaces (list): Lista de strings com informações de interfaces
-            
-        Returns:
-            set: Conjunto com os nomes únicos das interfaces
-        """
-        names = set()
-        i = 0
-        for a in interfaces:
-            name = a.split(" ")
-            names.add(name[0])
-            i+=1
-        return names
- 
     def getinterfaces(self):
         """
         Obtém a lista de interfaces de rede do sistema usando o comando ip.
@@ -995,33 +797,5 @@ class NMS_Agent:
         text = text.split("\n")
         removeNulls(text)
         return text[1:]
-    
-    def interfaceStatsCheckpoint(self,interface):
-        """
-        Obtém estatísticas de uma interface de rede num momento específico.
-        
-        Args:
-            interface (str): Nome da interface de rede
-            
-        Returns:
-            snetio: Objeto com estatísticas de rede (bytes enviados/recebidos, pacotes, etc.)
-        """
-        return psutil.net_io_counters(pernic = True)[interface]
-
-        
-    def get_packet_rate(self,net1,net2):
-        """
-        Calcula a taxa de pacotes (recebidos + enviados) entre dois checkpoints.
-        
-        Args:
-            net1: Estatísticas de rede do primeiro checkpoint
-            net2: Estatísticas de rede do segundo checkpoint
-            
-        Returns:
-            float: Taxa de pacotes por segundo (soma de recebidos e enviados)
-        """
-        rx_rate = (net2.packets_recv - net1.packets_recv)# / self.frequency
-        tx_rate = (net2.packets_sent - net1.packets_sent)# / self.frequency
-        return (rx_rate + tx_rate) / self.frequency
 
     
