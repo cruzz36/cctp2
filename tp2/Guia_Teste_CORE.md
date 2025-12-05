@@ -73,41 +73,375 @@ A topologia está definida em `topologiatp2.imn`. A estrutura inclui:
 
 ## Passo 3: Copiar Código para os Nós
 
-### Opção A: Copiar Manualmente
+> **📖 Guia Detalhado**: Consulte `Guia_Copiar_Ficheiros_CORE.md` para instruções passo-a-passo completas sobre como copiar ficheiros para o CORE, incluindo métodos alternativos e troubleshooting.
 
-1. **Nave-Mãe (servidor)**:
-   - Clicar com botão direito no nó da Nave-Mãe
-   - **Shell Window** ou **Terminal**
-   - Copiar todos os ficheiros do projeto para o nó:
-     ```bash
-     # Criar diretório
-     mkdir -p /tmp/nms
-     cd /tmp/nms
-     
-     # Copiar ficheiros (ajustar caminho conforme necessário)
-     # Pode usar scp, rsync, ou copiar manualmente via interface do CORE
-     ```
+Este é um passo crítico! Existem várias formas de copiar os ficheiros para os nós do CORE.
 
-### Opção B: Usar Script de Cópia (Recomendado)
+### Método 1: Usar Diretório Partilhado (MAIS FÁCIL - Recomendado)
 
-Criar um script que copia automaticamente os ficheiros para todos os nós:
+O CORE permite montar diretórios do sistema host nos nós. Esta é a forma mais simples!
+
+#### Configurar Diretório Partilhado:
+
+1. **No CORE, antes de iniciar a sessão:**
+   - Clicar com botão direito em cada nó (n1, n2, n3, n4)
+   - **Configure** → **Services** → **File Transfer**
+   - Adicionar diretório partilhado:
+     - **Source**: `/caminho/para/CC/tp2` (no sistema host)
+     - **Destination**: `/tmp/nms` (no nó)
+     - **Mount point**: `/tmp/nms`
+
+2. **Alternativamente, editar o ficheiro `.imn` diretamente:**
+   ```xml
+   node n1 {
+       ...
+       services {
+           FileTransfer {
+               /caminho/para/CC/tp2 /tmp/nms
+           }
+       }
+   }
+   ```
+
+3. **Depois de iniciar a sessão:**
+   - Os ficheiros estarão automaticamente disponíveis em `/tmp/nms` em cada nó
+   - Não precisa copiar manualmente!
+
+#### Vantagens:
+- ✅ Ficheiros sempre atualizados (sincronização automática)
+- ✅ Não precisa copiar manualmente
+- ✅ Mudanças no código são imediatamente visíveis nos nós
+
+---
+
+### Método 2: Copiar Manualmente via Interface do CORE
+
+#### Passo a Passo Detalhado:
+
+1. **Preparar ficheiros no sistema host:**
+   ```bash
+   # No seu computador (fora do CORE)
+   cd /caminho/para/CC/tp2
+   
+   # Criar arquivo compactado com todos os ficheiros
+   tar -czf nms_code.tar.gz \
+       protocol/ \
+       server/ \
+       client/ \
+       otherEntities/ \
+       *.py \
+       requirements.txt \
+       --exclude='__pycache__' \
+       --exclude='*.pyc'
+   ```
+
+2. **No CORE, para cada nó (n1, n2, n3, n4):**
+   
+   a. **Clicar com botão direito no nó** → **Shell Window** ou **Terminal**
+   
+   b. **Criar diretório:**
+      ```bash
+      mkdir -p /tmp/nms
+      cd /tmp/nms
+      ```
+   
+   c. **Usar File Transfer do CORE:**
+      - No CORE, menu **Tools** → **File Transfer**
+      - Selecionar nó de origem (seu computador) e nó de destino (n1, n2, etc.)
+      - Arrastar `nms_code.tar.gz` para o nó
+      - Ou usar **Upload** para enviar ficheiro
+   
+   d. **Descompactar no nó:**
+      ```bash
+      cd /tmp/nms
+      tar -xzf nms_code.tar.gz
+      ls -la  # Verificar que ficheiros foram copiados
+      ```
+
+3. **Verificar estrutura:**
+   ```bash
+   cd /tmp/nms
+   ls -R
+   # Deve mostrar:
+   # protocol/
+   # server/
+   # client/
+   # otherEntities/
+   # start_nms.py
+   # start_rover.py
+   # etc.
+   ```
+
+---
+
+### Método 3: Usar SCP/RSYNC (Se CORE permitir)
+
+Se o CORE tiver conectividade de rede com o sistema host:
 
 ```bash
-#!/bin/bash
-# copy_to_core.sh
+# No sistema host (fora do CORE)
+cd /caminho/para/CC/tp2
 
-# Diretório do projeto
-PROJECT_DIR="/caminho/para/CC/tp2"
-
-# Nós do CORE (ajustar conforme topologia)
-NODES=("n1" "n2" "n3" "n4" "n5")  # Exemplo
-
-for node in "${NODES[@]}"; do
-    echo "Copiando para $node..."
-    # Usar vcmd do CORE para copiar ficheiros
-    # Ajustar conforme método de cópia disponível
-done
+# Para cada nó, usar scp
+scp -r * root@10.0.1.10:/tmp/nms/  # Nave-Mãe
+scp -r * root@10.0.3.10:/tmp/nms/  # Rover1
+scp -r * root@10.0.2.10:/tmp/nms/  # Rover2
+scp -r * root@10.0.0.10:/tmp/nms/  # Ground Control
 ```
+
+**Nota**: Este método pode não funcionar dependendo da configuração do CORE.
+
+---
+
+### Método 4: Script Automático de Cópia
+
+Criar um script Python que usa a API do CORE ou comandos vcmd:
+
+```python
+#!/usr/bin/env python3
+"""
+Script para copiar ficheiros para todos os nós do CORE.
+Requer que o CORE esteja a correr e os nós estejam ativos.
+"""
+
+import os
+import subprocess
+import tarfile
+
+# Configuração
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+NODES = {
+    "n1": "10.0.1.10",      # Nave-Mãe
+    "n2": "10.0.0.10",      # Ground Control
+    "n3": "10.0.3.10",      # Rover1
+    "n4": "10.0.2.10",      # Rover2
+}
+
+def create_tarball():
+    """Cria arquivo tar.gz com todos os ficheiros necessários."""
+    print("A criar arquivo compactado...")
+    tarball = "/tmp/nms_code.tar.gz"
+    
+    with tarfile.open(tarball, "w:gz") as tar:
+        # Adicionar diretórios e ficheiros
+        for item in ["protocol", "server", "client", "otherEntities"]:
+            if os.path.exists(item):
+                tar.add(item, arcname=item)
+        
+        # Adicionar ficheiros Python na raiz
+        for file in os.listdir("."):
+            if file.endswith(".py") and os.path.isfile(file):
+                tar.add(file)
+        
+        # Adicionar requirements.txt
+        if os.path.exists("requirements.txt"):
+            tar.add("requirements.txt")
+    
+    print(f"Arquivo criado: {tarball}")
+    return tarball
+
+def copy_to_node(node_name, node_ip, tarball):
+    """Copia ficheiros para um nó específico."""
+    print(f"\nCopiando para {node_name} ({node_ip})...")
+    
+    try:
+        # Método 1: Tentar usar vcmd (se disponível)
+        cmd = f"vcmd -c /tmp/pycore.*/{node_name} -- tar -xzf {tarball} -C /tmp/nms/"
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print(f"[OK] Ficheiros copiados para {node_name}")
+            return True
+        else:
+            print(f"[AVISO] vcmd falhou, tentar método alternativo...")
+            # Método alternativo: usar scp (se disponível)
+            cmd = f"scp {tarball} root@{node_ip}:/tmp/"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                # Descompactar no nó remoto
+                cmd = f"ssh root@{node_ip} 'mkdir -p /tmp/nms && cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz'"
+                subprocess.run(cmd, shell=True)
+                print(f"[OK] Ficheiros copiados para {node_name}")
+                return True
+            else:
+                print(f"[ERRO] Não foi possível copiar para {node_name}")
+                print(f"Erro: {result.stderr}")
+                return False
+    
+    except Exception as e:
+        print(f"[ERRO] Erro ao copiar para {node_name}: {e}")
+        return False
+
+def main():
+    print("="*60)
+    print("CÓPIA DE FICHEIROS PARA NÓS DO CORE")
+    print("="*60)
+    
+    # Criar arquivo compactado
+    tarball = create_tarball()
+    
+    # Copiar para cada nó
+    success_count = 0
+    for node_name, node_ip in NODES.items():
+        if copy_to_node(node_name, node_ip, tarball):
+            success_count += 1
+    
+    print("\n" + "="*60)
+    print(f"Cópia concluída: {success_count}/{len(NODES)} nós")
+    print("="*60)
+    
+    if success_count == len(NODES):
+        print("\n[OK] Todos os ficheiros foram copiados com sucesso!")
+        print("\nPróximos passos:")
+        print("1. Verificar ficheiros em cada nó: ls -la /tmp/nms")
+        print("2. Instalar dependências: pip3 install -r /tmp/nms/requirements.txt")
+        print("3. Iniciar servidores conforme guia")
+    else:
+        print("\n[AVISO] Alguns nós não receberam ficheiros.")
+        print("Use método manual (File Transfer do CORE) para os nós restantes.")
+
+if __name__ == '__main__':
+    main()
+```
+
+**Guardar como**: `copy_to_core.py`
+
+**Uso**:
+```bash
+python3 copy_to_core.py
+```
+
+---
+
+### Método 5: Copiar Ficheiro por Ficheiro via Terminal do CORE
+
+Para cada nó, abrir terminal e copiar manualmente:
+
+1. **No terminal do nó (ex: n1):**
+   ```bash
+   mkdir -p /tmp/nms
+   cd /tmp/nms
+   ```
+
+2. **Usar editor de texto do CORE:**
+   - No CORE, menu **Tools** → **Text Editor**
+   - Criar novo ficheiro
+   - Copiar conteúdo de cada ficheiro Python
+   - Guardar em `/tmp/nms/` no nó
+
+3. **Ou usar cat com heredoc:**
+   ```bash
+   cat > /tmp/nms/start_nms.py << 'EOF'
+   # (colar conteúdo do ficheiro aqui)
+   EOF
+   ```
+
+**Nota**: Este método é muito trabalhoso, use apenas para ficheiros pequenos ou ajustes.
+
+---
+
+### Método 6: Usar Git no CORE (Se disponível)
+
+Se os nós do CORE tiverem acesso à internet:
+
+```bash
+# Em cada nó
+cd /tmp
+git clone <url_do_repositorio> nms
+# ou
+wget <url_do_zip> && unzip nms.zip
+```
+
+---
+
+## Verificação Após Cópia
+
+Após copiar ficheiros, **verificar em cada nó**:
+
+```bash
+# Em cada nó (n1, n2, n3, n4)
+cd /tmp/nms
+
+# Verificar estrutura
+ls -la
+ls -R
+
+# Verificar que ficheiros principais existem
+test -f start_nms.py && echo "OK: start_nms.py" || echo "ERRO: start_nms.py"
+test -f start_rover.py && echo "OK: start_rover.py" || echo "ERRO: start_rover.py"
+test -d protocol && echo "OK: protocol/" || echo "ERRO: protocol/"
+test -d server && echo "OK: server/" || echo "ERRO: server/"
+test -d client && echo "OK: client/" || echo "ERRO: client/"
+test -d otherEntities && echo "OK: otherEntities/" || echo "ERRO: otherEntities/"
+
+# Verificar permissões
+chmod +x start_nms.py start_rover.py start_ground_control.py
+```
+
+---
+
+## Instalar Dependências nos Nós
+
+Após copiar ficheiros, instalar dependências em cada nó:
+
+```bash
+# Em cada nó
+cd /tmp/nms
+pip3 install -r requirements.txt
+
+# Ou instalar manualmente:
+pip3 install psutil flask requests
+```
+
+**Verificar instalação:**
+```bash
+python3 -c "import psutil; import flask; import requests; print('OK: Todas as dependências instaladas')"
+```
+
+---
+
+## Estrutura de Ficheiros Esperada
+
+Após cópia bem-sucedida, cada nó deve ter:
+
+```
+/tmp/nms/
+├── protocol/
+│   ├── __init__.py
+│   ├── MissionLink.py
+│   └── TelemetryStream.py
+├── server/
+│   ├── __init__.py
+│   └── NMS_Server.py
+├── client/
+│   ├── __init__.py
+│   └── NMS_Agent.py
+├── otherEntities/
+│   ├── __init__.py
+│   ├── Device.py
+│   ├── Limit.py
+│   └── JSONParser.py
+├── start_nms.py
+├── start_rover.py
+├── start_ground_control.py
+├── GroundControl.py
+├── requirements.txt
+└── (outros ficheiros .py se necessário)
+```
+
+---
+
+## Recomendação Final
+
+**Para facilitar**, recomendo usar o **Método 1 (Diretório Partilhado)**:
+
+1. Configurar diretório partilhado no CORE antes de iniciar
+2. Ficheiros ficam automaticamente disponíveis em todos os nós
+3. Mudanças no código são imediatamente visíveis
+4. Não precisa copiar manualmente
+
+Se o diretório partilhado não funcionar, use o **Método 2 (File Transfer do CORE)** que é o mais confiável.
 
 ## Passo 4: Executar Nave-Mãe (Servidor)
 
