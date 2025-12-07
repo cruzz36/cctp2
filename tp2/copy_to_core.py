@@ -22,10 +22,11 @@ import shutil
 # Configuração
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 NODES = {
-    "n1": {"ip": "10.0.1.10", "name": "NaveMae"},
-    "n2": {"ip": "10.0.0.10", "name": "GroundControl"},
-    "n3": {"ip": "10.0.3.10", "name": "Rover1"},
-    "n4": {"ip": "10.0.2.10", "name": "Rover2"},
+    # nomes iguais aos nós na topologia CORE
+    "NaveMae": {"ip": "10.0.1.10", "name": "NaveMae"},
+    "GroundControl": {"ip": "10.0.0.10", "name": "GroundControl"},
+    "Rover1": {"ip": "10.0.3.10", "name": "Rover1"},
+    "Rover2": {"ip": "10.0.2.10", "name": "Rover2"},
 }
 
 # Ficheiros e diretórios a copiar
