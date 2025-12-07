@@ -79,6 +79,14 @@ pip3 install -r requirements.txt
 - GC não liga: usa `--api http://10.0.1.10:8082`.
 - Falhou cópia: reenviar `nms_code.tar.gz` ou montar diretório partilhado.
 
-### 7) O que é cada coisa
-- MissionLink → missões/progresso (UDP 8080).
-...***
+### 7) Depois de dar pull (para tudo ficar igual nos nós)
+- No host CORE (`/home/core/Downloads/cctp2-main/tp2`):
+  1. `git pull`
+  2. `python3 copy_to_core.py` (gera novo `nms_code.tar.gz`; se falhar, usa método Zip do passo 2)
+- Em cada nó (NaveMae, GroundControl, Rover1, Rover2):
+  3. Parar processos antigos: `pkill -f start_nms.py || true && pkill -f start_rover.py || true && pkill -f start_ground_control.py || true`
+  4. Limpar cópia antiga: `rm -rf /tmp/nms`
+  5. Receber nova cópia (via File Transfer ou vcmd, conforme passo 2) e extrair em `/tmp/nms`
+  6. `cd /tmp/nms && pip3 install -r requirements.txt` (ou método offline do passo 3)
+  7. Arrancar de novo (passo 4): NaveMae → rovers → GroundControl
+- Não é obrigatório fechar os terminais vcmd; basta parar os processos e recarregar `/tmp/nms`. Se quiser, pode fechar/reabrir.
