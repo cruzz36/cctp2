@@ -134,7 +134,10 @@ class NMS_Server:
         Cria diretórios necessários e inicializa os protocolos MissionLink e TelemetryStream.
         """
         self.id = socket.gethostname()
-        self.IPADDRESS = self.getinterfaces()[0].split(" ")[1]
+        # Preferir a interface da rede dos rovers (10.0.1.x). Se não existir, usar a primeira.
+        interfaces = self.getinterfaces()
+        rover_ip = next((i.split(" ")[1] for i in interfaces if i.split(" ")[1].startswith("10.0.1.")), None)
+        self.IPADDRESS = rover_ip if rover_ip else interfaces[0].split(" ")[1]
         dir = f"../{self.id}/"
         try:
             os.mkdir(dir)
