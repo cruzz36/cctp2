@@ -1,5 +1,6 @@
 import socket
 from otherEntities import Limit
+import time
 
 
 # [flag,idMission,seq,ack,size,missionType,message]
@@ -646,8 +647,21 @@ class MissionLink:
             - 4 - ip address
         """
         message = ""
-        # Establish connection
-        (ipDest,portDest),idAgent,seq,ack = self.acceptConnection()
+        # Establish connection, com timeout total de ~10s para não ficar infinito
+        start_wait = time.time()
+        while True:
+            try:
+                (ipDest,portDest),idAgent,seq,ack = self.acceptConnection()
+                break
+            except socket.timeout:
+                if time.time() - start_wait >= 10:
+                    raise TimeoutError("MissionLink: sem ligação após 10s à espera de SYN")
+                continue
+            except Exception as e:
+                if time.time() - start_wait >= 10:
+                    raise TimeoutError(f"MissionLink: sem ligação após 10s ({e})")
+                print(f"Erro ao aceitar conexão: {e}")
+                continue
         idMission = None  # Será extraído da primeira mensagem
 
         fileName = None
