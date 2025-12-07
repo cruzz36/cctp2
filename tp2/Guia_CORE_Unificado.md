@@ -50,6 +50,7 @@ pip3 install -r requirements.txt
 ### 4) Arrancar (terminal de cada nó)
 - ctrl-c/ctrl-v nos vcmd/XTerm: selecionar texto copia (depois e colar noutro terminal do core e copiar com ctrl-shift-c); para colar usar botão do meio (scroll-click).
 - Ordem para evitar timeout na Nave-Mãe: arrancar NaveMae e logo a seguir os rovers (Rover1, Rover2); só depois o GroundControl. Se a thread do MissionLink cair por timeout, relança `start_nms.py` depois de subires os rovers.
+- comando clear do vcmd : `TERM=vt100 clear`
 - **Nave-Mãe (n1)**  
   `cd /tmp/nms`  
   `python3 start_nms.py`
