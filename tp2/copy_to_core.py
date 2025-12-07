@@ -31,6 +31,7 @@ NODES = {
 
 # Ficheiros e diretórios a copiar
 ITEMS_TO_COPY = [
+    "API",
     "protocol",
     "server",
     "client",
