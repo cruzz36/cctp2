@@ -195,53 +195,62 @@ class NMS_Server:
         NOTA: O idAgent é extraído do handshake e identificado pelo IP/porta.
               O protocolo de dados não inclui idAgent, apenas idMission.
         """
-        lista = self.missionLink.recv()
-        # lista tem: [idAgent, idMission, missionType, message, ip]
-        # idAgent é identificado pelo IP/porta do handshake
-        idAgent = lista[0]
-        idMission = lista[1]
-        missionType = lista[2]  # Tipo de operação: R, T, M, Q, P (NÃO confundir com "task" do JSON)
-        message = lista[3]
-        ip = lista[4]
+        while True:
+            try:
+                lista = self.missionLink.recv()
+            except TimeoutError as e:
+                print(f"[AVISO] MissionLink timeout à espera de rover: {e}")
+                continue
+            except Exception as e:
+                print(f"[AVISO] Erro inesperado no MissionLink: {e}")
+                continue
 
-        # ============================================================
-        # PROCESSAMENTO POR TIPO DE OPERAÇÃO (missionType)
-        # ============================================================
-        # NOTA: missionType indica o tipo de OPERAÇÃO do protocolo,
-        #       não o tipo de tarefa física (capture_images, etc.)
-        #       O tipo de tarefa física está dentro do JSON quando missionType="T"
-        # ============================================================
-        
-        if missionType == self.missionLink.registerAgent:  # "R"
-            # Rover regista-se na Nave-Mãe
-            self.registerAgent(idAgent,ip) # It already sends the confirmation reply
-            return
+            # lista tem: [idAgent, idMission, missionType, message, ip]
+            # idAgent é identificado pelo IP/porta do handshake
+            idAgent = lista[0]
+            idMission = lista[1]
+            missionType = lista[2]  # Tipo de operação: R, T, M, Q, P (NÃO confundir com "task" do JSON)
+            message = lista[3]
+            ip = lista[4]
 
-        # if missionType == self.missionLink.sendMetrics:  # "M"
-        #     # Rover envia métricas (nome de ficheiro JSON)
-        #     try:
-        #         parts = message.split("_")
-        #         if len(parts) >= 4:
-        #             iter = parts[3].split(".")[0]
-        #         else:
-        #             iter = "unknown"
-        #             print(f"Aviso: Formato de nome de ficheiro inválido: {message}")
-        #     except (IndexError, AttributeError) as e:
-        #         print(f"Erro ao processar nome de ficheiro de métricas: {e}")
-        #         iter = "error"
-        #     self.missionLink.send(ip,self.missionLink.port,None,idAgent,idMission,iter)
-        #     return
+            # ============================================================
+            # PROCESSAMENTO POR TIPO DE OPERAÇÃO (missionType)
+            # ============================================================
+            # NOTA: missionType indica o tipo de OPERAÇÃO do protocolo,
+            #       não o tipo de tarefa física (capture_images, etc.)
+            #       O tipo de tarefa física está dentro do JSON quando missionType="T"
+            # ============================================================
+            
+            if missionType == self.missionLink.registerAgent:  # "R"
+                # Rover regista-se na Nave-Mãe
+                self.registerAgent(idAgent,ip) # It already sends the confirmation reply
+                continue
 
-        if missionType == self.missionLink.requestMission:  # "Q"
-            # Rover solicita uma missão à Nave-Mãe
-            self.handleMissionRequest(idAgent, ip)
-            return
+            # if missionType == self.missionLink.sendMetrics:  # "M"
+            #     # Rover envia métricas (nome de ficheiro JSON)
+            #     try:
+            #         parts = message.split("_")
+            #         if len(parts) >= 4:
+            #             iter = parts[3].split(".")[0]
+            #         else:
+            #             iter = "unknown"
+            #             print(f"Aviso: Formato de nome de ficheiro inválido: {message}")
+            #     except (IndexError, AttributeError) as e:
+            #         print(f"Erro ao processar nome de ficheiro de métricas: {e}")
+            #         iter = "error"
+            #     self.missionLink.send(ip,self.missionLink.port,None,idAgent,idMission,iter)
+            #     continue
 
-        if missionType == self.missionLink.reportProgress:  # "P"
-            # Rover reporta progresso de uma missão em execução
-            # O campo 'message' contém dados de progresso (JSON)
-            self.handleMissionProgress(idAgent, idMission, message, ip)
-            return
+            if missionType == self.missionLink.requestMission:  # "Q"
+                # Rover solicita uma missão à Nave-Mãe
+                self.handleMissionRequest(idAgent, ip)
+                continue
+
+            if missionType == self.missionLink.reportProgress:  # "P"
+                # Rover reporta progresso de uma missão em execução
+                # O campo 'message' contém dados de progresso (JSON)
+                self.handleMissionProgress(idAgent, idMission, message, ip)
+                continue
 
     def sendTask(self,ip,idAgent,idMission,task):
         """

@@ -655,10 +655,12 @@ class MissionLink:
                 break
             except socket.timeout:
                 if time.time() - start_wait >= 10:
+                    print("MissionLink: sem ligação após 10s à espera de SYN")
                     raise TimeoutError("MissionLink: sem ligação após 10s à espera de SYN")
                 continue
             except Exception as e:
                 if time.time() - start_wait >= 10:
+                    print(f"MissionLink: sem ligação após 10s ({e})")
                     raise TimeoutError(f"MissionLink: sem ligação após 10s ({e})")
                 print(f"Erro ao aceitar conexão: {e}")
                 continue
