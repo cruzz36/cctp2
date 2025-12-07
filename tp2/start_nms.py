@@ -7,6 +7,7 @@ Uso: python3 start_nms.py
 
 import sys
 import os
+import subprocess
 
 # Adicionar diretório atual ao path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -15,12 +16,37 @@ from server import NMS_Server
 import threading
 import time
 
+def cleanup_old_processes():
+    """
+    Liberta portas 8080/8081/8082 e termina processos antigos do NMS.
+    Evita o erro "Address already in use" quando há instâncias penduradas.
+    """
+    print("[INFO] A limpar processos antigos e portas 8080/8081/8082...")
+    cmds = [
+        ["pkill", "-f", "start_nms.py"],
+        ["pkill", "-f", "MissionLink.py"],
+        ["pkill", "-f", "TelemetryStream.py"],
+        ["fuser", "-k", "8080/udp"],
+        ["fuser", "-k", "8081/tcp"],
+        ["fuser", "-k", "8082/tcp"],
+    ]
+    for cmd in cmds:
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            # Se pkill/fuser não existirem no ambiente, simplesmente ignora
+            continue
+        except Exception:
+            continue
+    time.sleep(0.5)
+
 def main():
     print("="*60)
     print("NAVE-MÃE - Iniciando...")
     print("="*60)
     
     try:
+        cleanup_old_processes()
         server = NMS_Server.NMS_Server()
         
         # Iniciar MissionLink (UDP 8080) em thread
