@@ -159,7 +159,7 @@ class NMS_Server:
         
         # Inicializar API de Observação
         try:
-            from CC.tp2.API.ObservationAPI import ObservationAPI
+            from API.ObservationAPI import ObservationAPI
             self.observation_api = ObservationAPI(self, host='0.0.0.0', port=8082)
         except ImportError as e:
             print(f"Aviso: API de Observação não disponível: {e}")

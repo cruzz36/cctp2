@@ -272,6 +272,15 @@ class NMS_Agent:
         
         if retries >= max_retries:
             print(f"Aviso: Máximo de tentativas ({max_retries}) atingido ao registar")
+    
+    def registerAgent(self, ip):
+        """
+        Alias para register() para compatibilidade com código existente.
+        
+        Args:
+            ip (str): Endereço IP da Nave-Mãe
+        """
+        return self.register(ip)
 
 
     def requestMission(self, ip):
