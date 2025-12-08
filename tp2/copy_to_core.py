@@ -180,27 +180,38 @@ def copy_to_node(node_name, node_info, tarball_path, core_session=None):
     print(f"         3. No terminal do nó: mkdir -p /tmp/nms && cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz")
     return False
 
-def verify_node(node_name, node_info):
+def verify_node(node_name, node_info, core_session=None):
     """Verifica se ficheiros foram copiados corretamente."""
     node_ip = node_info["ip"]
     node_display = node_info["name"]
     
     print(f"\n[{node_name}] Verificando {node_display}...")
     
+    # Primeiro tentar via vcmd (não depende de SSH)
+    if core_session:
+        try:
+            cmd = f"vcmd -c {core_session}/{node_name} -- sh -c 'test -d /tmp/nms && test -f /tmp/nms/start_nms.py && echo OK || echo FAIL'"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            if "OK" in result.stdout:
+                print("  [OK] Ficheiros verificados (vcmd)")
+                return True
+        except Exception as e:
+            print(f"  [AVISO] Erro na verificação via vcmd: {e}")
+    
+    # Fallback: tentar via SSH (se estiver configurado)
     try:
-        # Tentar verificar via SSH
         cmd = f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{node_ip} 'test -d /tmp/nms && test -f /tmp/nms/start_nms.py && echo OK || echo FAIL'"
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
         
         if "OK" in result.stdout:
-            print(f"  [OK] Ficheiros verificados")
+            print(f"  [OK] Ficheiros verificados (ssh)")
             return True
         else:
             print(f"  [AVISO] Não foi possível verificar automaticamente")
             return False
     
     except Exception as e:
-        print(f"  [AVISO] Erro na verificação: {e}")
+        print(f"  [AVISO] Erro na verificação via ssh: {e}")
         return False
 
 def main():
@@ -245,7 +256,7 @@ def main():
     
     verify_count = 0
     for node_name, node_info in NODES.items():
-        if verify_node(node_name, node_info):
+        if verify_node(node_name, node_info, core_session):
             verify_count += 1
     
     # Resumo
