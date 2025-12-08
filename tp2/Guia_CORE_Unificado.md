@@ -29,6 +29,7 @@
   5) Copiar para Rover2: trocar por `/Rover2`
   - Se der “No such file or directory” no SESSION, volta a correr o passo 1).
   - Para abrir terminal de cada nó: botão direito no nó → Shell (no GUI do CORE).
+- Depois do `copy_to_core.py` (se a verificação por SSH falhar): abre o terminal de cada nó e confirma `ls /tmp/nms && test -f /tmp/nms/start_nms.py`. Se não existir, volta a extrair o tar no nó: `mkdir -p /tmp/nms && cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz`.
 
 ### 3) Instalar deps (em CADA nó, no terminal desse nó)
 ```
@@ -36,6 +37,7 @@ cd /tmp/nms
 pip3 install -r requirements.txt
 ```
 - Se não houver internet nos nós (erro de DNS/PyPI), faz offline a partir do host CORE:
+  - Para saber o número da sessão CORE (para usar no vcmd): `ls -d /tmp/pycore.*` (ex.: `/tmp/pycore.41269`)
   1. No host: `mkdir -p /home/core/pkgs`
   2. No host: `pip3 download --dest /home/core/pkgs psutil==5.9.0 flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 requests==2.22.0`
   3. No host: `tar -czf /home/core/pkgs.tgz -C /home/core pkgs`
@@ -90,3 +92,27 @@ pip3 install -r requirements.txt
   6. `cd /tmp/nms && pip3 install -r requirements.txt` (ou método offline do passo 3)
   7. Arrancar de novo (passo 4): NaveMae → rovers → GroundControl
 - Não é obrigatório fechar os terminais vcmd; basta parar os processos e recarregar `/tmp/nms`. Se quiser, pode fechar/reabrir.
+- Automático pós-pull (sem internet nos nós) — tudo no host CORE:
+  ```bash
+  # 1) Atualizar código e copiar para nós
+  cd /home/core/Downloads/cctp2-main/tp2
+  SESSION=$(ls -d /tmp/pycore.* | head -1)
+  git pull
+  python3 copy_to_core.py  # já envia o tar para NaveMae/GroundControl/Rover1/Rover2
+
+  # 2) Preparar deps offline
+  mkdir -p /home/core/pkgs
+  pip3 download --dest /home/core/pkgs \
+    psutil==5.9.0 \
+    flask==2.3.3 itsdangerous==2.1.2 jinja2==3.1.2 markupsafe==2.1.5 werkzeug==2.3.7 click==8.1.7 \
+    requests==2.31.0
+  tar -czf /home/core/pkgs.tgz -C /home/core pkgs
+
+  # 3) Em cada nó (loop), limpar /tmp/nms, extrair tar e instalar deps offline
+  for NODE in NaveMae GroundControl Rover1 Rover2; do
+    sudo sh -c "vcmd -c $SESSION/$NODE -- sh -c 'pkill -f start_nms.py || true; pkill -f start_rover.py || true; pkill -f start_ground_control.py || true; rm -rf /tmp/nms; mkdir -p /tmp/nms'"
+    sudo sh -c "cat /home/core/Downloads/cctp2-main/tp2/nms_code.tar.gz | vcmd -c $SESSION/$NODE -- sh -c 'cd /tmp/nms && tar -xzf -'"
+    sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c $SESSION/$NODE -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==2.3.3 itsdangerous==2.1.2 jinja2==3.1.2 markupsafe==2.1.5 werkzeug==2.3.7 click==8.1.7 psutil==5.9.0 requests==2.31.0'"
+  done
+  echo "Pronto: arrancar (passo 4): NaveMae -> rovers -> GroundControl"
+  ```

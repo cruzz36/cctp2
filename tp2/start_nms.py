@@ -23,7 +23,7 @@ def cleanup_old_processes():
     """
     print("[INFO] A limpar processos antigos e portas 8080/8081/8082...")
     cmds = [
-        ["pkill", "-f", "start_nms.py"],
+        # Não matar o processo atual; apenas componentes antigos
         ["pkill", "-f", "MissionLink.py"],
         ["pkill", "-f", "TelemetryStream.py"],
         ["fuser", "-k", "8080/udp"],
