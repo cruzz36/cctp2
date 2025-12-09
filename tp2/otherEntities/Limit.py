@@ -16,8 +16,7 @@ class Limit:
             self.buffersize (int): Tamanho do buffer em bytes (fixo em 1024, independente do parâmetro)
             self.timeout (int): Timeout em segundos para operações de rede (2 segundos)
         
-        NOTA: O parâmetro buffersize é ignorado - o valor é sempre fixo em 1024.
-              Isto pode ser um bug - deveria usar self.buffersize = buffersize
+        NOTA: Se precisares de outro tamanho, passa via buffersize.
         """
-        self.buffersize = 1024  # Tamanho fixo do buffer (ignora o parâmetro)
+        self.buffersize = buffersize  # Usa o valor passado (padrão 1024)
         self.timeout = 2        # Timeout de 2 segundos para operações de rede

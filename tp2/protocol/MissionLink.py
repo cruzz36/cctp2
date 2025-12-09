@@ -651,7 +651,7 @@ class MissionLink:
         start_wait = time.time()
         while True:
             try:
-        (ipDest,portDest),idAgent,seq,ack = self.acceptConnection()
+                (ipDest,portDest),idAgent,seq,ack = self.acceptConnection()
                 break
             except socket.timeout:
                 if time.time() - start_wait >= 10:

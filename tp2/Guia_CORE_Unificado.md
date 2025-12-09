@@ -46,8 +46,14 @@ pip3 install -r requirements.txt
      sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.XXXX/<NODE> -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
      ```
      (Troca `XXXX` pelo número da sessão e `<NODE>` pelo nome real, ex.: NaveMae, fazer isto para todos)
-  5. Confirmar num nó:  
-     `sudo vcmd -c /tmp/pycore.XXXX/NaveMae -- sh -c "python3 - <<'PY'\nimport psutil, requests, flask\nprint('OK deps')\nPY"`
+  5. Confirmar num nó (substitui `XXXX` pela sessão):  
+     ```
+     sudo vcmd -c /tmp/pycore.XXXX/NaveMae -- python3 - <<'PY'
+import psutil, requests, flask
+print('OK deps')
+PY
+     ```
+     (ou, sem heredoc: `echo "import psutil,requests,flask;print('OK deps')" | sudo vcmd -c /tmp/pycore.41269/NaveMae -- python3 -`)
 
 ### 4) Arrancar (terminal de cada nó)
 - ctrl-c/ctrl-v nos vcmd/XTerm: selecionar texto copia (depois e colar noutro terminal do core e copiar com ctrl-shift-c); para colar usar botão do meio (scroll-click).
@@ -74,6 +80,14 @@ pip3 install -r requirements.txt
 - Em qualquer nó: `cd /tmp/nms && python3 test_core_automated.py auto`
 - Em qualquer nó: `cd /tmp/nms && chmod +x test_core_integration.sh && ./test_core_integration.sh`
 - API (do GC ou n1): `curl http://10.0.1.10:8082/rovers`
+- Quando usar cada teste:
+  - Antes de copiar para os nós (no host): `python3 test_imports.py`
+  - Após extrair em cada nó, antes de arrancar serviços: `python3 test_core_automated.py auto`
+  - `test_core_integration.sh` é só um wrapper para o teste acima (em `/tmp/nms`)
+- Interpretação rápida:
+  - Se `test_core_automated.py` falhar por porta ocupada: pare serviços (`pkill -f start_nms.py`, `fuser -k 8080/udp 8081/tcp 8082/tcp`) e repita.
+  - Se falhar import/ficheiro: falta algo em `/tmp/nms` ou deps; recopie (passo 2) e reinstale deps (passo 3).
+  - Para validar comunicação real, siga `TESTE_POS_START.md` (MissionLink, Telemetry, API, GC) com serviços a correr.
 
 ### 6) Se der erro
 - “Module not found”: confirma `/tmp/nms` e `__init__.py`.
@@ -84,7 +98,7 @@ pip3 install -r requirements.txt
 ### 7) Depois de dar pull (para tudo ficar igual nos nós)
 - No host CORE (`/home/core/Downloads/cctp2-main/tp2`):
   1. `git pull`
-  2. `python3 copy_to_core.py` (gera novo `nms_code.tar.gz`; se falhar, usa método Zip do passo 2)
+  2. `python3 copy_to_core.py` (gera novo `nms_code.tar.gz` (copy ja apaga o antigo); se falhar, usa método Zip do passo 2)
 - Em cada nó (NaveMae, GroundControl, Rover1, Rover2):
   3. Parar processos antigos: `pkill -f start_nms.py || true && pkill -f start_rover.py || true && pkill -f start_ground_control.py || true`
   4. Limpar cópia antiga: `rm -rf /tmp/nms`

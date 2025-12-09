@@ -26,9 +26,9 @@ try:
     from server import NMS_Server
     from client import NMS_Agent
     from protocol import MissionLink, TelemetryStream
-    print '✓ Imports OK'
+    print('✓ Imports OK')
 except Exception as e:
-    print f'✗ Erro nos imports: {e}'
+    print(f'✗ Erro nos imports: {e}')
     sys.exit(1)
 "
 
