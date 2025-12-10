@@ -11,12 +11,12 @@ node n1 {
 	 ip address 10.0.0.11/24
 	!
     }
-    services {
-	# Rotas para redes dos rovers via Satelite (10.0.1.1)
-	# Necessárias para que a Nave-Mãe possa comunicar com os rovers
-	ip route add 10.0.2.0/24 via 10.0.1.1
-	ip route add 10.0.3.0/24 via 10.0.1.1
-    }
+    # NOTA: Rotas aplicadas manualmente após arranque (ver Guia_CORE_Unificado.md secção 1.5)
+    # Comandos em services podem impedir arranque se executados antes das interfaces estarem prontas
+    # services {
+    #	ip route add 10.0.2.0/24 via 10.0.1.1
+    #	ip route add 10.0.3.0/24 via 10.0.1.1
+    # }
     canvas c1
     iconcoords {528.0 152.0}
     labelcoords {528.0 184.0}
@@ -34,11 +34,10 @@ node n2 {
 	 ip address 10.0.0.10/24
 	!
     }
-    services {
-	# Rota para chegar à NaveMae (10.0.1.0/24) via IP 10.0.0.11 da NaveMae
-	# Necessária para que o Ground Control possa aceder à API de Observação
-	ip route add 10.0.1.0/24 via 10.0.0.11
-    }
+    # NOTA: Rota aplicada manualmente após arranque (ver Guia_CORE_Unificado.md secção 1.5)
+    # services {
+    #	ip route add 10.0.1.0/24 via 10.0.0.11
+    # }
     canvas c1
     iconcoords {218.0 152.0}
     labelcoords {218.0 184.0}
@@ -55,11 +54,10 @@ node n3 {
 	 ip address 10.0.3.10/24
 	!
     }
-    services {
-	# Gateway default via Satelite (10.0.3.1) para alcançar NaveMae
-	# Necessário para que o Rover1 possa comunicar com a Nave-Mãe
-	ip route add default via 10.0.3.1
-    }
+    # NOTA: Rota aplicada manualmente após arranque (ver Guia_CORE_Unificado.md secção 1.5)
+    # services {
+    #	ip route add default via 10.0.3.1
+    # }
     canvas c1
     iconcoords {726.0 511.0}
     labelcoords {726.0 543.0}
@@ -76,11 +74,10 @@ node n4 {
 	 ip address 10.0.2.10/24
 	!
     }
-    services {
-	# Gateway default via Satelite (10.0.2.1) para alcançar NaveMae
-	# Necessário para que o Rover2 possa comunicar com a Nave-Mãe
-	ip route add default via 10.0.2.1
-    }
+    # NOTA: Rota aplicada manualmente após arranque (ver Guia_CORE_Unificado.md secção 1.5)
+    # services {
+    #	ip route add default via 10.0.2.1
+    # }
     canvas c1
     iconcoords {336.0 511.0}
     labelcoords {336.0 543.0}
@@ -103,13 +100,12 @@ node n5 {
 	 ip address 10.0.1.1/24
 	!
     }
-    services {
-	# Habilitar IP forwarding para que o Satélite possa encaminhar pacotes entre sub-redes
-	# CRÍTICO: Sem isto, os pacotes não passam entre as diferentes sub-redes
-	# Usar sysctl é mais robusto que echo direto
-	sysctl -w net.ipv4.ip_forward=1
-	echo 1 > /proc/sys/net/ipv4/ip_forward
-    }
+    # NOTA: IP forwarding aplicado manualmente após arranque (ver Guia_CORE_Unificado.md secção 1.5)
+    # Comandos em services podem impedir arranque se executados antes das interfaces estarem prontas
+    # services {
+    #	sysctl -w net.ipv4.ip_forward=1
+    #	echo 1 > /proc/sys/net/ipv4/ip_forward
+    # }
     canvas c1
     iconcoords {528.0 340.0}
     labelcoords {528.0 372.0}
