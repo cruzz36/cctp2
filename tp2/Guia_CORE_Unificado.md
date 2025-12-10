@@ -43,9 +43,27 @@ pip3 install -r requirements.txt
   3. No host: `tar -czf /home/core/pkgs.tgz -C /home/core pkgs`
   4. Para cada nó (NaveMae/GroundControl/Rover1/Rover2, um de cada vez), no host:
      ```
-     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.XXXX/<NODE> -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+     //Jipow ----------------------------------------------------------------------------------
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.44129/NaveMae -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.44129/GrounControl -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.44129/Rover1 -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.44129/Rover2 -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+
+
+
+
+     //Qjm ----------------------------------------------------------------------------------
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.41269/NaveMae -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.41269/GrounControl -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.41269/Rover1 -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.41269/Rover2 -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
      ```
-     (Troca `XXXX` pelo número da sessão e `<NODE>` pelo nome real, ex.: NaveMae, fazer isto para todos)
   5. Confirmar num nó (substitui `XXXX` pela sessão):  
      ```
      sudo vcmd -c /tmp/pycore.XXXX/NaveMae -- python3 - <<'PY'
