@@ -38,32 +38,38 @@ def main():
     print("="*60)
     
     try:
+        print(f"[DEBUG] start_rover: Criando instância NMS_Agent com Nave-Mãe em {nms_ip}")
         rover = NMS_Agent.NMS_Agent(nms_ip)
         rover.id = rover_id
+        print(f"[DEBUG] start_rover: Rover ID definido como {rover_id}")
         
         # Registo na Nave-Mãe
-        print(f"\n[...] A registar-se na Nave-Mãe {nms_ip}...")
+        print(f"\n[DEBUG] start_rover: Iniciando processo de registo na Nave-Mãe {nms_ip}...")
         max_registration_retries = 5
         registration_success = False
         
         for attempt in range(1, max_registration_retries + 1):
             try:
+                print(f"[DEBUG] start_rover: Tentativa {attempt}/{max_registration_retries} de registo...")
                 rover.registerAgent(nms_ip)
-                print(f"[OK] Registado como {rover_id}")
+                print(f"[OK] Registado como {rover_id} na Nave-Mãe {nms_ip}")
                 registration_success = True
                 break
             except Exception as e:
                 if attempt < max_registration_retries:
-                    print(f"[...] Tentativa {attempt}/{max_registration_retries} falhou: {e}")
-                    print(f"[...] A tentar novamente em 2 segundos...")
+                    print(f"[AVISO] Tentativa {attempt}/{max_registration_retries} falhou: {e}")
+                    print(f"[DEBUG] start_rover: A tentar novamente em 2 segundos...")
                     time.sleep(2)
                 else:
                     print(f"[ERRO] Falha ao registar após {max_registration_retries} tentativas: {e}")
                     print("[AVISO] Certifique-se de que:")
                     print("  1. A Nave-Mãe está a correr (python3 start_nms.py)")
-                    print("  2. O IP da Nave-Mãe está correto")
-                    print("  3. A conectividade de rede está funcionando")
-                    print("  4. A porta UDP 8080 está acessível")
+                    print("  2. O IP da Nave-Mãe está correto (verificar: ping -c 2 10.0.1.10)")
+                    print("  3. As rotas de rede estão configuradas (ver Guia_CORE_Unificado.md secção 1.5)")
+                    print("  4. O IP forwarding está habilitado no Satélite")
+                    print("  5. A porta UDP 8080 está acessível")
+                    import traceback
+                    traceback.print_exc()
         
         if not registration_success:
             print("[AVISO] Continuando sem registo bem-sucedido...")

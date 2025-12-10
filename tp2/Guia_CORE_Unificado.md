@@ -9,20 +9,85 @@
 - Rover1 (n3): `10.0.3.10`. Rover2 (n4): `10.0.2.10`.
 - Satélite (n5): `10.0.3.1 / 10.0.2.1 / 10.0.1.1`.
 
-### 1.5) Rotas de Rede (IMPORTANTE)
-**Porquê são necessárias:** A topologia tem sub-redes distintas (`10.0.0.x`, `10.0.1.x`, `10.0.2.x`, `10.0.3.x`). Por padrão, o CORE não cria rotas automáticas entre sub-redes, pelo que os nós não conseguem comunicar entre si sem rotas explícitas.
+### 1.5) Rotas de Rede (CRÍTICO - executar ANTES de arrancar serviços)
 
-**As rotas estão configuradas no ficheiro `topologiatp2.imn`** através de `custom-config` em cada nó:
+**PORQUÊ É NECESSÁRIO:**
+- A topologia tem múltiplas sub-redes separadas (`10.0.0.x`, `10.0.1.x`, `10.0.2.x`, `10.0.3.x`)
+- Por padrão, o CORE não configura rotas automáticas entre sub-redes diferentes
+- O Satélite precisa de IP forwarding habilitado para encaminhar pacotes entre sub-redes
+- Sem estas configurações, os rovers não conseguem comunicar com a Nave-Mãe (10.0.1.10) e o GroundControl não consegue aceder à API
+
+**CONFIGURAÇÕES NO `.imn` (aplicadas automaticamente):**
+- **Satélite:** IP forwarding habilitado (`echo 1 > /proc/sys/net/ipv4/ip_forward`)
 - **Nave-Mãe:** Rotas para `10.0.2.0/24` e `10.0.3.0/24` via `10.0.1.1` (Satélite)
 - **Ground Control:** Rota para `10.0.1.0/24` via `10.0.0.11` (Nave-Mãe)
 - **Rover1:** Rota default via `10.0.3.1` (Satélite)
 - **Rover2:** Rota default via `10.0.2.1` (Satélite)
 
-**As rotas são aplicadas automaticamente** quando a topologia é carregada no CORE. Se por algum motivo as rotas não estiverem ativas, podes verificá-las manualmente:
-- Em cada nó: `ip route show`
-- Se necessário, adicionar manualmente (ver `DEBUG_CONEXOES.md`)
+**VERIFICAÇÃO OBRIGATÓRIA (após arrancar topologia, ANTES de arrancar serviços):**
 
-**NOTA:** Se alterares o ficheiro `.imn`, fecha e reabre a topologia no CORE para que as rotas sejam aplicadas.
+1. **Verificar rotas em cada nó:**
+   ```bash
+   # Em cada terminal de nó:
+   ip route show
+   ```
+
+2. **Verificar IP forwarding no Satélite:**
+   ```bash
+   # No terminal do Satélite:
+   cat /proc/sys/net/ipv4/ip_forward
+   # Deve mostrar "1". Se mostrar "0", executar: echo 1 > /proc/sys/net/ipv4/ip_forward
+   ```
+
+3. **Se as rotas não estiverem presentes, aplicá-las manualmente:**
+
+   **No terminal de Rover1:**
+   ```bash
+   ip route add default via 10.0.3.1
+   ip route show  # Verificar que apareceu
+   ```
+
+   **No terminal de Rover2:**
+   ```bash
+   ip route add default via 10.0.2.1
+   ip route show  # Verificar que apareceu
+   ```
+
+   **No terminal de NaveMae:**
+   ```bash
+   ip route add 10.0.2.0/24 via 10.0.1.1
+   ip route add 10.0.3.0/24 via 10.0.1.1
+   ip route show  # Verificar que apareceram
+   ```
+
+   **No terminal de GroundControl:**
+   ```bash
+   ip route add 10.0.1.0/24 via 10.0.0.11
+   ip route show  # Verificar que apareceu
+   ```
+
+   **No terminal do Satélite (se necessário):**
+   ```bash
+   echo 1 > /proc/sys/net/ipv4/ip_forward
+   cat /proc/sys/net/ipv4/ip_forward  # Deve mostrar "1"
+   ```
+
+4. **Testar conectividade (após aplicar rotas):**
+   ```bash
+   # No Rover1:
+   ping -c 2 10.0.1.10  # Deve responder
+   
+   # No Rover2:
+   ping -c 2 10.0.1.10  # Deve responder
+   
+   # No GroundControl:
+   ping -c 2 10.0.1.10  # Deve responder
+   curl http://10.0.1.10:8082/rovers  # Deve retornar JSON (mesmo que vazio)
+   ```
+
+5. **Só depois de confirmar que os pings funcionam, arrancar os serviços** (secção 4).
+
+**NOTA:** Se alterares o ficheiro `.imn`, fecha e reabre a topologia no CORE. Mesmo assim, verifica sempre as rotas e o IP forwarding antes de arrancar serviços.
 
 ### 2) Pôr código em cada nó (escolher UM método)
 - Diretório partilhado: montar esta pasta em `/tmp/nms` (Core → File Transfer → Source `/home/core/Downloads/cctp2-main/tp2/`, Destination `/tmp/nms` em cada nó).
@@ -61,7 +126,7 @@ pip3 install -r requirements.txt
      //Jipow ----------------------------------------------------------------------------------
      sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.44129/NaveMae -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
 
-     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.44129/GrounControl -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.44129/GroundControl -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
 
      sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.44129/Rover1 -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
 
@@ -73,7 +138,7 @@ pip3 install -r requirements.txt
      //Qjm ----------------------------------------------------------------------------------
      sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.41269/NaveMae -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
 
-     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.41269/GrounControl -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.41269/GroundControl -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
 
      sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.41269/Rover1 -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
 
@@ -94,6 +159,13 @@ PY
 
 
 ### 4) Arrancar (terminal de cada nó)
+
+**CRÍTICO: Verificar rotas e IP forwarding ANTES de arrancar serviços!**
+- Se ainda não verificaste as rotas (secção 1.5), **FAZ-ISSO AGORA** antes de continuar
+- Sem rotas corretas e IP forwarding no Satélite, os rovers não conseguem registar-se e o GroundControl não conecta à API
+- Verifica com `ip route show` em cada nó e `cat /proc/sys/net/ipv4/ip_forward` no Satélite
+- Testa conectividade com `ping -c 2 10.0.1.10` antes de arrancar
+
 - ctrl-c/ctrl-v nos vcmd/XTerm: selecionar texto copia (depois e colar noutro terminal do core e copiar com ctrl-shift-c); para colar usar botão do meio (scroll-click).
 - Ordem para evitar timeout na Nave-Mãe: arrancar NaveMae e logo a seguir os rovers (Rover1, Rover2); só depois o GroundControl. Se a thread do MissionLink cair por timeout, relança `start_nms.py` depois de subires os rovers.
 - comando clear do vcmd : `TERM=vt100 clear`
@@ -128,7 +200,13 @@ PY
   - Para validar comunicação real, siga `TESTE_POS_START.md` (MissionLink, Telemetry, API, GC) com serviços a correr.
 
 ### 6) Se der erro
-- “Module not found”: confirma `/tmp/nms` e `__init__.py`.
+- **Rovers presos no registo / GroundControl não conecta**: **PRIMEIRO**, verifica rotas e IP forwarding (secção 1.5):
+  - Em cada nó: `ip route show` (deve mostrar as rotas configuradas)
+  - No Satélite: `cat /proc/sys/net/ipv4/ip_forward` (deve mostrar "1")
+  - Se faltarem rotas ou IP forwarding, aplica-os manualmente conforme secção 1.5
+  - Testa conectividade: `ping -c 2 10.0.1.10` (deve responder)
+  - Só depois de confirmar que os pings funcionam, relança os serviços
+- "Module not found": confirma `/tmp/nms` e `__init__.py`.
 - Porta ocupada: `pkill -f start_nms.py` ou `pkill -f start_rover.py`.
 - GC não liga: usa `--api http://10.0.1.10:8082`.
 - Falhou cópia: reenviar `nms_code.tar.gz` ou montar diretório partilhado.

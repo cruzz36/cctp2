@@ -47,23 +47,29 @@ def main():
     
     try:
         cleanup_old_processes()
+        print("[DEBUG] start_nms: Criando instância NMS_Server...")
         server = NMS_Server.NMS_Server()
+        print(f"[DEBUG] start_nms: NMS_Server criado, IP: {server.IPADDRESS}")
         
         # Iniciar MissionLink (UDP 8080) em thread
+        print("[DEBUG] start_nms: Iniciando thread MissionLink (UDP:8080)...")
         ml_thread = threading.Thread(target=server.recvMissionLink, daemon=True)
         ml_thread.start()
         print("[OK] MissionLink (UDP:8080) iniciado")
         time.sleep(0.5)  # Pequeno delay para garantir inicialização
         
         # Iniciar TelemetryStream (TCP 8081) em thread
+        print("[DEBUG] start_nms: Iniciando thread TelemetryStream (TCP:8081)...")
         ts_thread = threading.Thread(target=server.recvTelemetry, daemon=True)
         ts_thread.start()
         print("[OK] TelemetryStream (TCP:8081) iniciado")
         time.sleep(0.5)
         
         # Iniciar API de Observação (HTTP 8082) em thread
+        print("[DEBUG] start_nms: Verificando disponibilidade da API de Observação...")
         if server.observation_api:
             try:
+                print("[DEBUG] start_nms: Iniciando API de Observação (HTTP:8082)...")
                 server.startObservationAPI()
                 # Aguardar um pouco mais para garantir que a API está pronta
                 time.sleep(1)

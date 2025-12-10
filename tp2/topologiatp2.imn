@@ -103,6 +103,11 @@ node n5 {
 	 ip address 10.0.1.1/24
 	!
     }
+    services {
+	# Habilitar IP forwarding para que o Satélite possa encaminhar pacotes entre sub-redes
+	# CRÍTICO: Sem isto, os pacotes não passam entre as diferentes sub-redes
+	echo 1 > /proc/sys/net/ipv4/ip_forward
+    }
     canvas c1
     iconcoords {528.0 340.0}
     labelcoords {528.0 372.0}
