@@ -289,21 +289,39 @@ class MissionLink:
                         retries += 1
                         print(f"SYN-ACK malformado recebido. Retry: ({retries}/{retryLimit})")
                         continue
-                    while lista[flagPos] != self.synackkey:
+                    # Loop para aguardar SYN-ACK correto (com timeout)
+                    synack_retries = 0
+                    max_synack_retries = 3
+                    while lista[flagPos] != self.synackkey and synack_retries < max_synack_retries:
+                        synack_retries += 1
+                        print(f"[DEBUG] startConnection: Aguardando SYN-ACK correto (tentativa {synack_retries}/{max_synack_retries})")
                         self.sock.sendto(
                             f"{self.synkey}|{idAgent}|{seqinicial}|0|_|0|-.-".encode(),
                             (destAddress, destPort)
                         )
-                        message,_ = self.sock.recvfrom(self.limit.buffersize)
-                        lista = message.decode().split("|")
-                        # Validar formato da mensagem
-                        if len(lista) < 7:
-                            # Mensagem malformada - reenviar SYN e continuar
-                            self.sock.sendto(
-                                f"{self.synkey}|{idAgent}|{seqinicial}|0|_|0|-.-".encode(),
-                                (destAddress, destPort)
-                            )
-                            continue
+                        try:
+                            message,_ = self.sock.recvfrom(self.limit.buffersize)
+                            lista = message.decode().split("|")
+                            # Validar formato da mensagem
+                            if len(lista) < 7:
+                                # Mensagem malformada - reenviar SYN e continuar
+                                print(f"[AVISO] startConnection: Mensagem malformada recebida, reenviando SYN")
+                                self.sock.sendto(
+                                    f"{self.synkey}|{idAgent}|{seqinicial}|0|_|0|-.-".encode(),
+                                    (destAddress, destPort)
+                                )
+                                continue
+                        except socket.timeout:
+                            print(f"[AVISO] startConnection: Timeout ao aguardar SYN-ACK no loop interno")
+                            break
+                    
+                    # Se não recebeu SYN-ACK correto, incrementar retries e tentar novamente
+                    if lista[flagPos] != self.synackkey:
+                        retries += 1
+                        print(f"[AVISO] startConnection: SYN-ACK correto não recebido após {max_synack_retries} tentativas. Retry: ({retries}/{retryLimit})")
+                        if retries >= retryLimit:
+                            break
+                        continue
 
                 except socket.timeout:
                     # Timeout ao aguardar SYN-ACK - incrementar retries e continuar para retry
