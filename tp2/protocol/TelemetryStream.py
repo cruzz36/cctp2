@@ -20,7 +20,7 @@ class TelemetryStream:
         Args:
             ip (str): Endereço IP do servidor
             storefolder (str, optional): Pasta onde armazenar ficheiros recebidos. Defaults to "."
-            limit (int, optional): Tamanho do buffer em bytes. Defaults to 1024
+            limit (int or Limit, optional): Tamanho do buffer em bytes ou objeto Limit. Defaults to 1024
         """
         self.ip = ip
         self.port = 8081
@@ -38,7 +38,11 @@ class TelemetryStream:
             self.storefolder = storefolder
         else: 
             self.storefolder = f"{storefolder}/"
-        self.limit = Limit.Limit(limit)
+        # Se limit já for um objeto Limit, usar diretamente; caso contrário, criar novo
+        if isinstance(limit, Limit.Limit):
+            self.limit = limit
+        else:
+            self.limit = Limit.Limit(limit)
 
     def _handle_client(self, clientSocket, ip, port):
         """

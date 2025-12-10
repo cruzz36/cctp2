@@ -154,7 +154,7 @@ class NMS_Server:
             os.mkdir(alertDir)
         except FileExistsError:
             None
-        self.telemetryStream = TelemetryStream.TelemetryStream(self.IPADDRESS,alertDir,Limit.Limit())
+        self.telemetryStream = TelemetryStream.TelemetryStream(self.IPADDRESS,alertDir)
         self.agents =  dict() # (agentId,ip)
         self.tasks = dict()
         self.pendingMissions = []  # Missões pendentes para atribuir quando rover solicitar
