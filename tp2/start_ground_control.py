@@ -6,7 +6,7 @@ Uso: python3 start_ground_control.py [API_URL]
 
 Exemplos:
   python3 start_ground_control.py
-  python3 start_ground_control.py http://10.0.1.10:8082
+  python3 start_ground_control.py http://10.0.1.11:8082
 """
 
 import sys
@@ -18,8 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from GroundControl import GroundControl
 
 def main():
-    # IP padrão da Nave-Mãe na topologia: 10.0.1.10
-    default_api = "http://10.0.1.10:8082"
+    # IP padrão da Nave-Mãe na topologia: 10.0.1.11
+    default_api = "http://10.0.1.11:8082"
     api_url = sys.argv[1] if len(sys.argv) > 1 else default_api
     
     print("="*60)
