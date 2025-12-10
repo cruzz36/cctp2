@@ -17,20 +17,37 @@
 - O Satélite precisa de IP forwarding habilitado para encaminhar pacotes entre sub-redes
 - Sem estas configurações, os rovers não conseguem comunicar com a Nave-Mãe (10.0.1.10) e o GroundControl não consegue aceder à API
 
-**CONFIGURAÇÕES NO `.imn` (devem ser aplicadas quando a topologia arranca):**
+**APLICAÇÃO AUTOMÁTICA DE ROTAS (via script):**
+- O ficheiro `.imn` está configurado para executar automaticamente o script `scripts/apply_routes.sh` em cada nó
+- Este script detecta o hostname e aplica as rotas apropriadas automaticamente
+- **IMPORTANTE:** O script deve estar em `/tmp/nms/scripts/apply_routes.sh` em cada nó antes de arrancar a topologia
+
+**CONFIGURAÇÕES APLICADAS AUTOMATICAMENTE:**
 - **Satélite:** IP forwarding habilitado (`sysctl -w net.ipv4.ip_forward=1` e `echo 1 > /proc/sys/net/ipv4/ip_forward`)
 - **Nave-Mãe:** Rotas para `10.0.2.0/24` e `10.0.3.0/24` via `10.0.1.1` (Satélite)
 - **Ground Control:** Rota para `10.0.1.0/24` via `10.0.0.11` (Nave-Mãe)
 - **Rover1:** Rota default via `10.0.3.1` (Satélite)
 - **Rover2:** Rota default via `10.0.2.1` (Satélite)
 
-**IMPORTANTE - FECHAR E REABRIR TOPOLOGIA:**
-- Se alteraste o ficheiro `.imn`, **DEVES FECHAR E REABRIR a topologia no CORE**:
-  1. No CORE: File → Close (ou parar a simulação com Stop)
-  2. File → Open → selecionar `topologiatp2.imn` atualizado
-  3. Arrancar a simulação (botão Play/Start)
-- **Mesmo assim**, os comandos em `services` podem não ser executados automaticamente pelo CORE
-- **SEMPRE verifica manualmente** antes de arrancar serviços (ver abaixo)
+**PREPARAÇÃO ANTES DE ARRANCAR:**
+
+1. **Copiar código para `/tmp/nms` em cada nó** (ver passo 2 do guia)
+   - O código deve incluir a pasta `scripts/` com o ficheiro `apply_routes.sh`
+   - **IMPORTANTE:** Após copiar, garantir que o script tem permissões de execução em cada nó:
+     ```bash
+     chmod +x /tmp/nms/scripts/apply_routes.sh
+     ```
+   - Se usares o método tar.gz, o comando já inclui o `chmod` (ver passo 2)
+
+2. **Fechar e reabrir topologia no CORE:**
+   - Se alteraste o ficheiro `.imn`, **DEVES FECHAR E REABRIR a topologia no CORE**:
+     1. No CORE: File → Close (ou parar a simulação com Stop)
+     2. File → Open → selecionar `topologiatp2.imn` atualizado
+     3. Arrancar a simulação (botão Play/Start)
+
+3. **Verificar se rotas foram aplicadas automaticamente:**
+   - Após arrancar, em cada nó: `ip route show`
+   - Se as rotas não aparecerem, aplicar manualmente (ver abaixo)
 
 **VERIFICAÇÃO E CONFIGURAÇÃO DE ROTAS (após arrancar topologia, ANTES de arrancar serviços):**
 
@@ -164,10 +181,10 @@ Os scripts `verificar_rotas.sh` e `check_network.sh` são copiados automaticamen
 **NOTA:** O script `copy_to_core.py` copia automaticamente os scripts `verificar_rotas.sh` e `check_network.sh` para `/tmp/nms` em cada nó. Estes scripts são essenciais para configurar as rotas de rede após a inicialização da topologia.
 - Diretório partilhado: montar esta pasta em `/tmp/nms` (Core → File Transfer → Source `/home/core/Downloads/cctp2-main/tp2/`, Destination `/tmp/nms` em cada nó).
 - Zip (manual): no **host CORE** correr  
-  `tar -czf nms_code.tar.gz protocol server client otherEntities *.py requirements.txt --exclude='__pycache__' --exclude='*.pyc'`  
+  `tar -czf nms_code.tar.gz protocol server client otherEntities scripts *.py requirements.txt --exclude='__pycache__' --exclude='*.pyc'`  
   Depois, Core → Tools → File Transfer → enviar `nms_code.tar.gz` para cada nó.  
   No **terminal de cada nó**:  
-  `mkdir -p /tmp/nms && cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz`
+  `mkdir -p /tmp/nms && cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz && chmod +x /tmp/nms/scripts/apply_routes.sh`
 - Script (automático, no **host CORE**):  
   `cd /home/core/Downloads/cctp2-main/tp2`  
   `python3 copy_to_core.py`  
