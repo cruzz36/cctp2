@@ -32,7 +32,13 @@
 - **Mesmo assim**, os comandos em `services` podem não ser executados automaticamente pelo CORE
 - **SEMPRE verifica manualmente** antes de arrancar serviços (ver abaixo)
 
-**VERIFICAÇÃO OBRIGATÓRIA (após arrancar topologia, ANTES de arrancar serviços):**
+**VERIFICAÇÃO E CONFIGURAÇÃO DE ROTAS (após arrancar topologia, ANTES de arrancar serviços):**
+
+**MÉTODO AUTOMÁTICO (RECOMENDADO):**
+- Usa o script `verificar_rotas.sh` que é copiado automaticamente pelo `copy_to_core.py`
+- Ver secção "SCRIPTS DE DIAGNÓSTICO E CONFIGURAÇÃO" abaixo para instruções detalhadas
+
+**MÉTODO MANUAL (se o script automático não funcionar):**
 
 1. **Verificar rotas em cada nó:**
    ```bash
@@ -102,20 +108,60 @@
   3. Arrancar a simulação (botão Play)
 - **Mesmo assim**, verifica sempre as rotas e o IP forwarding antes de arrancar serviços (os comandos em `services` podem não ser executados automaticamente)
 
-**SCRIPTS DE DIAGNÓSTICO:**
+**SCRIPTS DE DIAGNÓSTICO E CONFIGURAÇÃO:**
 
-1. **check_network.sh** (diagnóstico completo):
-   - Copia o ficheiro `check_network.sh` para `/tmp/nms` em cada nó
-   - Em cada nó, executa: `chmod +x check_network.sh && ./check_network.sh`
-   - O script mostra IPs, rotas, IP forwarding e testa conectividade
+Os scripts `verificar_rotas.sh` e `check_network.sh` são copiados automaticamente pelo `copy_to_core.py` para `/tmp/nms` em cada nó.
+
+**MÉTODO RECOMENDADO - Aplicar rotas automaticamente após inicializar topologia:**
+
+1. **Inicializar a topologia no CORE:**
+   - File → Open → selecionar `topologiatp2.imn`
+   - Arrancar a simulação (botão Play/Start)
+   - Aguardar que todos os nós fiquem verdes
+
+2. **Aplicar rotas automaticamente em todos os nós:**
+   - No **host CORE**, executa o seguinte comando para aplicar rotas em todos os nós de uma vez:
+   ```bash
+   SESSION=$(ls -d /tmp/pycore.* | head -1)
+   for NODE in NaveMae GroundControl Rover1 Rover2 Satelite; do
+     echo "[$NODE] Aplicando rotas..."
+     sudo vcmd -c $SESSION/$NODE -- sh -c 'cd /tmp/nms && chmod +x verificar_rotas.sh && ./verificar_rotas.sh'
+   done
+   ```
+   - Ou, se preferires fazer manualmente em cada nó:
+     - Abre o terminal de cada nó (botão direito no nó → Shell)
+     - Em cada nó, executa:
+       ```bash
+       cd /tmp/nms
+       chmod +x verificar_rotas.sh
+       ./verificar_rotas.sh
+       ```
+
+3. **Verificar que funcionou:**
+   - O script `verificar_rotas.sh` mostra automaticamente:
+     - Rotas configuradas
+     - IP forwarding no Satélite
+     - Testes de conectividade (ping)
+   - Se tudo estiver OK, verás mensagens `[OK]` e os pings devem funcionar
+
+**Scripts disponíveis:**
+
+1. **verificar_rotas.sh** (RECOMENDADO - aplicação automática):
+   - Detecta automaticamente qual nó está a executar (NaveMae, GroundControl, Rover1, Rover2, Satelite)
+   - Verifica e aplica automaticamente as rotas necessárias
+   - Habilita IP forwarding no Satélite
+   - Testa conectividade com pings
+   - Mostra resumo completo do estado da rede
+
+2. **check_network.sh** (diagnóstico completo):
+   - Mostra IPs configurados, rotas atuais, IP forwarding
+   - Testa conectividade entre nós
    - Indica exatamente o que falta configurar
-
-2. **verificar_rotas.sh** (aplicação automática):
-   - Copia o ficheiro `verificar_rotas.sh` para `/tmp/nms` em cada nó
-   - Em cada nó, executa: `chmod +x verificar_rotas.sh && ./verificar_rotas.sh`
-   - O script verifica e aplica automaticamente as rotas necessárias e testa conectividade
+   - Não aplica alterações, apenas diagnostica
 
 ### 2) Pôr código em cada nó (escolher UM método)
+
+**NOTA:** O script `copy_to_core.py` copia automaticamente os scripts `verificar_rotas.sh` e `check_network.sh` para `/tmp/nms` em cada nó. Estes scripts são essenciais para configurar as rotas de rede após a inicialização da topologia.
 - Diretório partilhado: montar esta pasta em `/tmp/nms` (Core → File Transfer → Source `/home/core/Downloads/cctp2-main/tp2/`, Destination `/tmp/nms` em cada nó).
 - Zip (manual): no **host CORE** correr  
   `tar -czf nms_code.tar.gz protocol server client otherEntities *.py requirements.txt --exclude='__pycache__' --exclude='*.pyc'`  

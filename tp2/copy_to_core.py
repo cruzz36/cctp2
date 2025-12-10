@@ -41,6 +41,8 @@ ITEMS_TO_COPY = [
     "start_ground_control.py",
     "GroundControl.py",
     "requirements.txt",
+    "verificar_rotas.sh",
+    "check_network.sh",
 ]
 
 def create_tarball():
