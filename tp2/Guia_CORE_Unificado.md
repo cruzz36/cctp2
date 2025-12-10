@@ -337,3 +337,46 @@ PY
   done
   echo "Pronto: arrancar (passo 4): NaveMae -> rovers -> GroundControl"
   ```
+
+  
+
+  ---------------------------------------------------------------------------------------------------------
+
+python3 copy_to_core.py
+
+ls -d /tmp/pycore.*
+
+mkdir -p /home/core/pkgs
+
+pip3 download --dest /home/core/pkgs psutil==5.9.0 flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 requests==2.22.0
+
+tar -czf /home/core/pkgs.tgz -C /home/core pkgs
+
+
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.37691/NaveMae -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.37691/GroundControl -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.37691/Rover1 -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+
+     sudo sh -c "cat /home/core/pkgs.tgz | vcmd -c /tmp/pycore.37691/Rover2 -- sh -c 'tar -xzf - -C /tmp && pip3 install --no-index --find-links /tmp/pkgs flask==1.1.1 itsdangerous==1.1.0 jinja2==2.10.1 markupsafe==1.1.1 werkzeug==0.16.1 click==7.0 psutil==5.9.0 requests==2.22.0'"
+
+
+Dentro do core
+
+Nave-Mãe (n1)
+cd /tmp/nms
+python3 start_nms.py
+
+Rover1 (n3)
+cd /tmp/nms
+python3 start_rover.py 10.0.1.10 r1
+
+Rover2 (n4)
+cd /tmp/nms
+python3 start_rover.py 10.0.1.10 r2
+
+Ground Control (n2)
+cd /tmp/nms
+python3 start_ground_control.py
+(só dashboard: python3 GroundControl.py --dashboard --api http://10.0.1.10:8082)
