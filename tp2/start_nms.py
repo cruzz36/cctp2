@@ -63,8 +63,17 @@ def main():
         
         # Iniciar API de Observação (HTTP 8082) em thread
         if server.observation_api:
-            server.startObservationAPI()
-            print("[OK] API de Observação (HTTP:8082) iniciada")
+            try:
+                server.startObservationAPI()
+                # Aguardar um pouco mais para garantir que a API está pronta
+                time.sleep(1)
+                print("[OK] API de Observação (HTTP:8082) iniciada")
+                print(f"[INFO] API acessível em: http://{server.IPADDRESS}:8082")
+                print(f"[INFO] API acessível em: http://0.0.0.0:8082 (todas as interfaces)")
+            except Exception as e:
+                print(f"[ERRO] Falha ao iniciar API de Observação: {e}")
+                import traceback
+                traceback.print_exc()
         else:
             print("[AVISO] API de Observação não disponível (Flask não instalado)")
         

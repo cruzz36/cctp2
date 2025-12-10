@@ -79,6 +79,7 @@ class ObservationAPI:
             return jsonify({
                 "api": "NMS Observation API",
                 "version": "1.0",
+                "status": "online",
                 "description": "API de Observação da Nave-Mãe para consulta de estado do sistema",
                 "endpoints": {
                     "/rovers": "Lista de rovers ativos e respetivo estado",
@@ -89,6 +90,16 @@ class ObservationAPI:
                     "/telemetry/<rover_id>": "Últimos dados de telemetria de um rover específico",
                     "/status": "Estado geral do sistema"
                 }
+            }), 200
+        
+        # Endpoint de health check
+        @self.app.route('/health', methods=['GET'])
+        def health():
+            """Health check endpoint para verificar se a API está a funcionar."""
+            return jsonify({
+                "status": "healthy",
+                "api": "NMS Observation API",
+                "timestamp": datetime.now().isoformat()
             }), 200
         
         # Lista de rovers ativos
@@ -103,7 +114,7 @@ class ObservationAPI:
                     "rovers": [
                         {
                             "rover_id": "r1",
-                            "ip": "10.0.4.11",
+                            "ip": "10.0.3.10",
                             "status": "active",
                             "last_seen": "2024-01-01T12:00:00",
                             "current_mission": "M-001" ou null
@@ -553,16 +564,32 @@ class ObservationAPI:
         
         def run_api():
             """Função para executar o servidor Flask em thread separada."""
-            print(f"API de Observação iniciada em http://{self.host}:{self.port}")
-            print(f"Documentação disponível em http://{self.host}:{self.port}/")
-            # Desabilitar logs do Flask em produção (opcional)
-            import logging
-            log = logging.getLogger('werkzeug')
-            log.setLevel(logging.ERROR)
-            self.app.run(host=self.host, port=self.port, debug=False, use_reloader=False)
+            try:
+                print(f"[API] A iniciar API de Observação em http://{self.host}:{self.port}")
+                # Desabilitar logs do Flask em produção (opcional)
+                import logging
+                log = logging.getLogger('werkzeug')
+                log.setLevel(logging.ERROR)
+                self.app.run(host=self.host, port=self.port, debug=False, use_reloader=False, threaded=True)
+            except Exception as e:
+                print(f"[ERRO] Falha ao iniciar API de Observação: {e}")
+                import traceback
+                traceback.print_exc()
+                self._running = False
         
         self._api_thread = threading.Thread(target=run_api, daemon=True)
         self._api_thread.start()
+        
+        # Aguardar um pouco para garantir que o servidor iniciou
+        import time
+        time.sleep(1)
+        
+        # Verificar se a thread está a correr
+        if self._api_thread.is_alive():
+            print(f"[OK] API de Observação iniciada em http://{self.host}:{self.port}")
+            print(f"[INFO] Documentação disponível em http://{self.host}:{self.port}/")
+        else:
+            print("[AVISO] Thread da API pode não ter iniciado corretamente")
     
     def stop(self):
         """

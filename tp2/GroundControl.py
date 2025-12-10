@@ -66,12 +66,10 @@ class GroundControl:
             response = requests.get(url, params=params, timeout=5)
             response.raise_for_status()
             return response.json()
-        except requests.exceptions.ConnectionError:
-            print(f"\n[ERRO] Não foi possível conectar à API em {self.api_url}")
-            print("Certifique-se de que a Nave-Mãe está a correr e a API está ativa.")
+        except requests.exceptions.ConnectionError as e:
+            # Não imprimir erro aqui - deixar o chamador decidir
             return None
         except requests.exceptions.Timeout:
-            print(f"\n[ERRO] Timeout ao conectar à API em {self.api_url}")
             return None
         except requests.exceptions.HTTPError as e:
             print(f"\n[ERRO] Erro HTTP {e.response.status_code}: {e}")
@@ -554,7 +552,7 @@ def main():
         epilog="""
 Exemplos de uso:
   python GroundControl.py                    # Interface interativa (API em localhost:8082)
-  python GroundControl.py --api http://10.0.4.10:8082  # Especificar URL da API
+  python GroundControl.py --api http://10.0.1.10:8082  # Especificar URL da API
   python GroundControl.py --dashboard        # Mostrar dashboard uma vez e sair
         """
     )

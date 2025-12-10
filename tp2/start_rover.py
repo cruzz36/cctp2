@@ -43,11 +43,30 @@ def main():
         
         # Registo na Nave-Mãe
         print(f"\n[...] A registar-se na Nave-Mãe {nms_ip}...")
-        try:
-            rover.registerAgent(nms_ip)
-            print(f"[OK] Registado como {rover_id}")
-        except Exception as e:
-            print(f"[AVISO] Erro no registo (pode continuar): {e}")
+        max_registration_retries = 5
+        registration_success = False
+        
+        for attempt in range(1, max_registration_retries + 1):
+            try:
+                rover.registerAgent(nms_ip)
+                print(f"[OK] Registado como {rover_id}")
+                registration_success = True
+                break
+            except Exception as e:
+                if attempt < max_registration_retries:
+                    print(f"[...] Tentativa {attempt}/{max_registration_retries} falhou: {e}")
+                    print(f"[...] A tentar novamente em 2 segundos...")
+                    time.sleep(2)
+                else:
+                    print(f"[ERRO] Falha ao registar após {max_registration_retries} tentativas: {e}")
+                    print("[AVISO] Certifique-se de que:")
+                    print("  1. A Nave-Mãe está a correr (python3 start_nms.py)")
+                    print("  2. O IP da Nave-Mãe está correto")
+                    print("  3. A conectividade de rede está funcionando")
+                    print("  4. A porta UDP 8080 está acessível")
+        
+        if not registration_success:
+            print("[AVISO] Continuando sem registo bem-sucedido...")
         
         # Iniciar telemetria contínua
         print(f"[...] A iniciar telemetria contínua...")

@@ -9,6 +9,21 @@
 - Rover1 (n3): `10.0.3.10`. Rover2 (n4): `10.0.2.10`.
 - Satélite (n5): `10.0.3.1 / 10.0.2.1 / 10.0.1.1`.
 
+### 1.5) Rotas de Rede (IMPORTANTE)
+**Porquê são necessárias:** A topologia tem sub-redes distintas (`10.0.0.x`, `10.0.1.x`, `10.0.2.x`, `10.0.3.x`). Por padrão, o CORE não cria rotas automáticas entre sub-redes, pelo que os nós não conseguem comunicar entre si sem rotas explícitas.
+
+**As rotas estão configuradas no ficheiro `topologiatp2.imn`** através de `custom-config` em cada nó:
+- **Nave-Mãe:** Rotas para `10.0.2.0/24` e `10.0.3.0/24` via `10.0.1.1` (Satélite)
+- **Ground Control:** Rota para `10.0.1.0/24` via `10.0.0.11` (Nave-Mãe)
+- **Rover1:** Rota default via `10.0.3.1` (Satélite)
+- **Rover2:** Rota default via `10.0.2.1` (Satélite)
+
+**As rotas são aplicadas automaticamente** quando a topologia é carregada no CORE. Se por algum motivo as rotas não estiverem ativas, podes verificá-las manualmente:
+- Em cada nó: `ip route show`
+- Se necessário, adicionar manualmente (ver `DEBUG_CONEXOES.md`)
+
+**NOTA:** Se alterares o ficheiro `.imn`, fecha e reabre a topologia no CORE para que as rotas sejam aplicadas.
+
 ### 2) Pôr código em cada nó (escolher UM método)
 - Diretório partilhado: montar esta pasta em `/tmp/nms` (Core → File Transfer → Source `/home/core/Downloads/cctp2-main/tp2/`, Destination `/tmp/nms` em cada nó).
 - Zip (manual): no **host CORE** correr  

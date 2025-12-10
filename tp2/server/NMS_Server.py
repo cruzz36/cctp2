@@ -164,9 +164,15 @@ class NMS_Server:
         try:
             from API.ObservationAPI import ObservationAPI
             self.observation_api = ObservationAPI(self, host='0.0.0.0', port=8082)
+            print(f"[INFO] API de Observação inicializada (host=0.0.0.0, port=8082)")
         except ImportError as e:
-            print(f"Aviso: API de Observação não disponível: {e}")
-            print("Instale Flask com: pip install flask")
+            print(f"[AVISO] API de Observação não disponível: {e}")
+            print("[AVISO] Instale Flask com: pip install flask")
+            self.observation_api = None
+        except Exception as e:
+            print(f"[ERRO] Erro ao inicializar API de Observação: {e}")
+            import traceback
+            traceback.print_exc()
             self.observation_api = None
 
 
@@ -183,9 +189,17 @@ class NMS_Server:
         Disponibiliza endpoints REST para consulta de estado do sistema.
         """
         if self.observation_api is not None:
-            self.observation_api.start()
+            try:
+                self.observation_api.start()
+                # Pequeno delay para garantir que a API está pronta
+                import time
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"[ERRO] Erro ao iniciar API de Observação: {e}")
+                import traceback
+                traceback.print_exc()
         else:
-            print("Aviso: API de Observação não disponível (Flask não instalado)")
+            print("[AVISO] API de Observação não disponível (Flask não instalado)")
 
     def recvMissionLink(self):
         """
