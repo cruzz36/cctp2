@@ -71,7 +71,12 @@ import psutil, requests, flask
 print('OK deps')
 PY
      ```
+     //Jipow ----------------------------------------------------------------------------------
+     (ou, sem heredoc: `echo "import psutil,requests,flask;print('OK deps')" | sudo vcmd -c /tmp/pycore.44129/NaveMae -- python3 -`)
+
+     //Qjm ----------------------------------------------------------------------------------
      (ou, sem heredoc: `echo "import psutil,requests,flask;print('OK deps')" | sudo vcmd -c /tmp/pycore.41269/NaveMae -- python3 -`)
+
 
 ### 4) Arrancar (terminal de cada nó)
 - ctrl-c/ctrl-v nos vcmd/XTerm: selecionar texto copia (depois e colar noutro terminal do core e copiar com ctrl-shift-c); para colar usar botão do meio (scroll-click).
