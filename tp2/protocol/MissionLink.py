@@ -339,6 +339,12 @@ class MissionLink:
         
         error_msg = f"[ERRO] Falha ao estabelecer conexão com {destAddress}:{destPort} após {retryLimit} tentativas (idAgent={idAgent})"
         print(error_msg)
+        print(f"[DEBUG] startConnection: Possíveis causas:")
+        print(f"  1. Rotas de rede não configuradas (verificar: ip route show)")
+        print(f"  2. IP forwarding não habilitado no Satélite (verificar: cat /proc/sys/net/ipv4/ip_forward)")
+        print(f"  3. Nave-Mãe não está a correr ou não está a escutar na porta {destPort}")
+        print(f"  4. Problemas de conectividade de rede (testar: ping -c 2 {destAddress})")
+        print(f"  5. Firewall bloqueando pacotes UDP na porta {destPort}")
         raise TimeoutError(error_msg)
 
 

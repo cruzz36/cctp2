@@ -76,7 +76,7 @@ def main():
         
         # Iniciar telemetria contínua
         print(f"[...] A iniciar telemetria contínua...")
-        rover.startContinuousTelemetry(nms_ip, interval=telemetry_interval)
+        rover.startContinuousTelemetry(nms_ip, interval_seconds=telemetry_interval)
         print(f"[OK] Telemetria contínua ativa (intervalo: {telemetry_interval}s)")
         
         print("="*60)

@@ -106,6 +106,8 @@ node n5 {
     services {
 	# Habilitar IP forwarding para que o Satélite possa encaminhar pacotes entre sub-redes
 	# CRÍTICO: Sem isto, os pacotes não passam entre as diferentes sub-redes
+	# Usar sysctl é mais robusto que echo direto
+	sysctl -w net.ipv4.ip_forward=1
 	echo 1 > /proc/sys/net/ipv4/ip_forward
     }
     canvas c1

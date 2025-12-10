@@ -17,12 +17,20 @@
 - O Satélite precisa de IP forwarding habilitado para encaminhar pacotes entre sub-redes
 - Sem estas configurações, os rovers não conseguem comunicar com a Nave-Mãe (10.0.1.10) e o GroundControl não consegue aceder à API
 
-**CONFIGURAÇÕES NO `.imn` (aplicadas automaticamente):**
-- **Satélite:** IP forwarding habilitado (`echo 1 > /proc/sys/net/ipv4/ip_forward`)
+**CONFIGURAÇÕES NO `.imn` (devem ser aplicadas quando a topologia arranca):**
+- **Satélite:** IP forwarding habilitado (`sysctl -w net.ipv4.ip_forward=1` e `echo 1 > /proc/sys/net/ipv4/ip_forward`)
 - **Nave-Mãe:** Rotas para `10.0.2.0/24` e `10.0.3.0/24` via `10.0.1.1` (Satélite)
 - **Ground Control:** Rota para `10.0.1.0/24` via `10.0.0.11` (Nave-Mãe)
 - **Rover1:** Rota default via `10.0.3.1` (Satélite)
 - **Rover2:** Rota default via `10.0.2.1` (Satélite)
+
+**IMPORTANTE - FECHAR E REABRIR TOPOLOGIA:**
+- Se alteraste o ficheiro `.imn`, **DEVES FECHAR E REABRIR a topologia no CORE**:
+  1. No CORE: File → Close (ou parar a simulação com Stop)
+  2. File → Open → selecionar `topologiatp2.imn` atualizado
+  3. Arrancar a simulação (botão Play/Start)
+- **Mesmo assim**, os comandos em `services` podem não ser executados automaticamente pelo CORE
+- **SEMPRE verifica manualmente** antes de arrancar serviços (ver abaixo)
 
 **VERIFICAÇÃO OBRIGATÓRIA (após arrancar topologia, ANTES de arrancar serviços):**
 
@@ -87,7 +95,25 @@
 
 5. **Só depois de confirmar que os pings funcionam, arrancar os serviços** (secção 4).
 
-**NOTA:** Se alterares o ficheiro `.imn`, fecha e reabre a topologia no CORE. Mesmo assim, verifica sempre as rotas e o IP forwarding antes de arrancar serviços.
+**CRÍTICO - FECHAR E REABRIR TOPOLOGIA:**
+- Se alteraste o ficheiro `.imn`, **DEVES FECHAR E REABRIR a topologia no CORE**:
+  1. No CORE: File → Close (ou parar a simulação)
+  2. File → Open → selecionar `topologiatp2.imn`
+  3. Arrancar a simulação (botão Play)
+- **Mesmo assim**, verifica sempre as rotas e o IP forwarding antes de arrancar serviços (os comandos em `services` podem não ser executados automaticamente)
+
+**SCRIPTS DE DIAGNÓSTICO:**
+
+1. **check_network.sh** (diagnóstico completo):
+   - Copia o ficheiro `check_network.sh` para `/tmp/nms` em cada nó
+   - Em cada nó, executa: `chmod +x check_network.sh && ./check_network.sh`
+   - O script mostra IPs, rotas, IP forwarding e testa conectividade
+   - Indica exatamente o que falta configurar
+
+2. **verificar_rotas.sh** (aplicação automática):
+   - Copia o ficheiro `verificar_rotas.sh` para `/tmp/nms` em cada nó
+   - Em cada nó, executa: `chmod +x verificar_rotas.sh && ./verificar_rotas.sh`
+   - O script verifica e aplica automaticamente as rotas necessárias e testa conectividade
 
 ### 2) Pôr código em cada nó (escolher UM método)
 - Diretório partilhado: montar esta pasta em `/tmp/nms` (Core → File Transfer → Source `/home/core/Downloads/cctp2-main/tp2/`, Destination `/tmp/nms` em cada nó).
@@ -219,7 +245,9 @@ PY
   3. Parar processos antigos: `pkill -f start_nms.py || true && pkill -f start_rover.py || true && pkill -f start_ground_control.py || true`
   4. Limpar cópia antiga: `rm -rf /tmp/nms`
   5. Receber nova cópia (via File Transfer ou vcmd, conforme passo 2) e extrair em `/tmp/nms`
-  6. `cd /tmp/nms && pip3 install -r requirements.txt` (ou método offline do passo 3)
+  6. **Opcional** - Reinstalar deps (só se necessário): `cd /tmp/nms && pip3 install -r requirements.txt` (ou método offline do passo 3)
+     - Se aparecer "Requirement already satisfied" para todos os pacotes, podes saltar este passo
+     - Se houver erros de importação depois, volta a instalar
   7. Arrancar de novo (passo 4): NaveMae → rovers → GroundControl
 - Não é obrigatório fechar os terminais vcmd; basta parar os processos e recarregar `/tmp/nms`. Se quiser, pode fechar/reabrir.
 - Automático pós-pull (sem internet nos nós) — tudo no host CORE:
