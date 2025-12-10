@@ -178,7 +178,7 @@ def copy_to_node(node_name, node_info, tarball_path, core_session=None):
     print(f"  [INFO] Use método manual:")
     print(f"         1. No CORE, Tools → File Transfer")
     print(f"         2. Enviar {tarball_path} para {node_name}")
-        print(f"         3. No terminal do nó: mkdir -p /tmp/nms && cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz && chmod +x /tmp/nms/scripts/apply_routes.sh")
+    print(f"         3. No terminal do nó: mkdir -p /tmp/nms && cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz && chmod +x /tmp/nms/scripts/apply_routes.sh")
     return False
 
 def verify_node(node_name, node_info, core_session=None):

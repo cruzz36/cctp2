@@ -12,9 +12,9 @@ node n1 {
 	!
     }
     services {
-	# Script aplica rotas automaticamente após interfaces estarem prontas
-	# Copiar scripts/apply_routes.sh para /tmp/nms/scripts/ antes de arrancar
-	/tmp/nms/scripts/apply_routes.sh || true
+	# Rotas aplicadas via script após arranque (ver Guia_CORE_Unificado.md)
+	# Deixar vazio para garantir que a topologia arranca sem problemas
+	# Executar manualmente após arranque: /tmp/nms/scripts/apply_routes.sh
     }
     canvas c1
     iconcoords {528.0 152.0}
@@ -34,8 +34,9 @@ node n2 {
 	!
     }
     services {
-	# Script aplica rotas automaticamente após interfaces estarem prontas
-	/tmp/nms/scripts/apply_routes.sh || true
+	# Rotas aplicadas via script após arranque (ver Guia_CORE_Unificado.md)
+	# Deixar vazio para garantir que a topologia arranca sem problemas
+	# Executar manualmente após arranque: /tmp/nms/scripts/apply_routes.sh
     }
     canvas c1
     iconcoords {218.0 152.0}
@@ -54,8 +55,9 @@ node n3 {
 	!
     }
     services {
-	# Script aplica rotas automaticamente após interfaces estarem prontas
-	/tmp/nms/scripts/apply_routes.sh || true
+	# Rotas aplicadas via script após arranque (ver Guia_CORE_Unificado.md)
+	# Deixar vazio para garantir que a topologia arranca sem problemas
+	# Executar manualmente após arranque: /tmp/nms/scripts/apply_routes.sh
     }
     canvas c1
     iconcoords {726.0 511.0}
@@ -74,8 +76,9 @@ node n4 {
 	!
     }
     services {
-	# Script aplica rotas automaticamente após interfaces estarem prontas
-	/tmp/nms/scripts/apply_routes.sh || true
+	# Rotas aplicadas via script após arranque (ver Guia_CORE_Unificado.md)
+	# Deixar vazio para garantir que a topologia arranca sem problemas
+	# Executar manualmente após arranque: /tmp/nms/scripts/apply_routes.sh
     }
     canvas c1
     iconcoords {336.0 511.0}
@@ -100,8 +103,9 @@ node n5 {
 	!
     }
     services {
-	# Script aplica IP forwarding automaticamente após interfaces estarem prontas
-	/tmp/nms/scripts/apply_routes.sh || true
+	# Rotas aplicadas via script após arranque (ver Guia_CORE_Unificado.md)
+	# Deixar vazio para garantir que a topologia arranca sem problemas
+	# Executar manualmente após arranque: /tmp/nms/scripts/apply_routes.sh
     }
     canvas c1
     iconcoords {528.0 340.0}
