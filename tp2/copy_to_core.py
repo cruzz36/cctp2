@@ -36,6 +36,7 @@ ITEMS_TO_COPY = [
     "server",
     "client",
     "otherEntities",
+    "scripts",
     "start_nms.py",
     "start_rover.py",
     "start_ground_control.py",
@@ -120,8 +121,8 @@ def copy_via_vcmd(node_name, tarball_path, core_session):
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
         
         if result.returncode == 0:
-            # Descompactar no nó
-            cmd = f"vcmd -c {core_session}/{node_name} -- sh -c 'cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz && rm /tmp/nms_code.tar.gz'"
+            # Descompactar no nó e dar permissões ao script de rotas
+            cmd = f"vcmd -c {core_session}/{node_name} -- sh -c 'cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz && chmod +x /tmp/nms/scripts/apply_routes.sh 2>/dev/null || true && rm /tmp/nms_code.tar.gz'"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
             return result.returncode == 0
         
@@ -141,8 +142,8 @@ def copy_via_scp(node_ip, tarball_path):
         if result.returncode != 0:
             return False
         
-        # Descompactar no nó remoto
-        cmd = f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{node_ip} 'mkdir -p /tmp/nms && cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz && rm /tmp/nms_code.tar.gz'"
+        # Descompactar no nó remoto e dar permissões ao script de rotas
+        cmd = f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{node_ip} 'mkdir -p /tmp/nms && cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz && chmod +x /tmp/nms/scripts/apply_routes.sh 2>/dev/null || true && rm /tmp/nms_code.tar.gz'"
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
         return result.returncode == 0
     
@@ -177,7 +178,7 @@ def copy_to_node(node_name, node_info, tarball_path, core_session=None):
     print(f"  [INFO] Use método manual:")
     print(f"         1. No CORE, Tools → File Transfer")
     print(f"         2. Enviar {tarball_path} para {node_name}")
-    print(f"         3. No terminal do nó: mkdir -p /tmp/nms && cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz")
+        print(f"         3. No terminal do nó: mkdir -p /tmp/nms && cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz && chmod +x /tmp/nms/scripts/apply_routes.sh")
     return False
 
 def verify_node(node_name, node_info, core_session=None):
@@ -281,6 +282,7 @@ def main():
         print("   mkdir -p /tmp/nms")
         print("   cd /tmp/nms")
         print("   tar -xzf /tmp/nms_code.tar.gz")
+        print("   chmod +x /tmp/nms/scripts/apply_routes.sh")
         print("   pip3 install -r requirements.txt")
     
     # Limpar arquivo temporário (opcional)
