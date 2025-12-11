@@ -105,31 +105,72 @@ def copy_via_vcmd(node_name, tarball_path, core_session):
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
         
         if result.returncode != 0:
+            print(f"    [AVISO] Falha ao criar diretório: {result.stderr}")
             return False
         
-        # Copiar arquivo para o nó
-        # vcmd pode não suportar cópia direta, então vamos tentar outro método
-        # Usar cat para copiar conteúdo
-        with open(tarball_path, 'rb') as f:
-            content = f.read()
-        
-        # Guardar temporariamente e copiar
-        temp_path = f"/tmp/{node_name}_nms_code.tar.gz"
-        with open(temp_path, 'wb') as f:
-            f.write(content)
-        
-        # Tentar copiar via vcmd (pode não funcionar em todas as versões)
-        cmd = f"vcmd -c {core_session}/{node_name} -- cp {temp_path} /tmp/nms_code.tar.gz"
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
-        
-        if result.returncode == 0:
-            # Descompactar no nó e dar permissões ao script de rotas
-            cmd = f"vcmd -c {core_session}/{node_name} -- sh -c 'cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz && chmod +x /tmp/nms/scripts/apply_routes.sh 2>/dev/null || true && rm /tmp/nms_code.tar.gz'"
+        # Método: Copiar arquivo para diretório compartilhado da sessão CORE
+        # O CORE permite acesso a ficheiros dentro da sessão via caminho absoluto
+        # Primeiro, copiar o arquivo para dentro da estrutura da sessão CORE
+        node_conf_dir = os.path.join(core_session, f"{node_name}.conf")
+        if os.path.exists(node_conf_dir):
+            # Copiar para o diretório de configuração do nó (acessível via vcmd)
+            shared_path = os.path.join(node_conf_dir, "nms_code.tar.gz")
+            try:
+                shutil.copy2(tarball_path, shared_path)
+            except Exception as e:
+                print(f"    [AVISO] Falha ao copiar para diretório compartilhado: {e}")
+                return False
+            
+            # Copiar do diretório compartilhado para /tmp/nms_code.tar.gz no nó
+            cmd = f"vcmd -c {core_session}/{node_name} -- cp {shared_path} /tmp/nms_code.tar.gz"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
-            return result.returncode == 0
+            
+            if result.returncode != 0:
+                print(f"    [AVISO] Falha ao copiar arquivo para nó: {result.stderr}")
+                # Limpar arquivo temporário
+                try:
+                    os.remove(shared_path)
+                except:
+                    pass
+                return False
+            
+            # Limpar arquivo temporário
+            try:
+                os.remove(shared_path)
+            except:
+                pass
+        else:
+            # Fallback: Tentar método direto via base64 (para ficheiros pequenos)
+            import base64
+            file_size = os.path.getsize(tarball_path)
+            if file_size > 100000:  # Se maior que 100KB, não usar base64
+                print(f"    [AVISO] Arquivo muito grande ({file_size} bytes), use método manual")
+                return False
+            
+            with open(tarball_path, 'rb') as f:
+                content = f.read()
+            
+            content_b64 = base64.b64encode(content).decode('utf-8')
+            cmd = f"vcmd -c {core_session}/{node_name} -- sh -c 'echo \"{content_b64}\" | base64 -d > /tmp/nms_code.tar.gz'"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode != 0:
+                print(f"    [AVISO] Falha ao copiar via base64: {result.stderr}")
+                return False
         
-        return False
+        # Descompactar no nó e dar permissões ao script de rotas
+        cmd = f"vcmd -c {core_session}/{node_name} -- sh -c 'cd /tmp/nms && tar -xzf /tmp/nms_code.tar.gz && chmod +x /tmp/nms/scripts/apply_routes.sh 2>/dev/null || true && rm -f /tmp/nms_code.tar.gz'"
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        
+        if result.returncode != 0:
+            print(f"    [AVISO] Falha ao descompactar: {result.stderr}")
+            return False
+        
+        return True
     
+    except subprocess.TimeoutExpired:
+        print(f"    [AVISO] Timeout ao copiar para {node_name}")
+        return False
     except Exception as e:
         print(f"    [AVISO] vcmd falhou: {e}")
         return False
