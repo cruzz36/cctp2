@@ -63,7 +63,11 @@ class GroundControl:
         """
         try:
             url = f"{self.api_url}{endpoint}"
-            response = requests.get(url, params=params, timeout=5)
+            # Adicionar timestamp para evitar cache
+            if params is None:
+                params = {}
+            params['_'] = int(time.time() * 1000)  # Timestamp em milissegundos
+            response = requests.get(url, params=params, timeout=5, headers={'Cache-Control': 'no-cache'})
             response.raise_for_status()
             return response.json()
         except requests.exceptions.ConnectionError as e:
@@ -246,16 +250,12 @@ class GroundControl:
             status = mission.get('status', 'N/A')
             geo_area = mission.get('geographic_area', {})
             duration = mission.get('duration_minutes', 0)
-            update_freq = mission.get('update_frequency_seconds', 0)
-            priority = mission.get('priority', 'N/A')
             
             print(f"\nMissão ID: {mission_id}")
             print(f"  Rover:              {rover_id}")
             print(f"  Tarefa:             {task}")
             print(f"  Estado:             {status}")
             print(f"  Duração:            {duration} minutos")
-            print(f"  Frequência Update:  {update_freq} segundos")
-            print(f"  Prioridade:         {priority}")
             
             if geo_area:
                 x1 = geo_area.get('x1', 0)
@@ -290,8 +290,6 @@ class GroundControl:
         print(f"  Tarefa:             {data.get('task', 'N/A')}")
         print(f"  Estado:             {data.get('status', 'N/A')}")
         print(f"  Duração:            {data.get('duration_minutes', 0)} minutos")
-        print(f"  Frequência Update:  {data.get('update_frequency_seconds', 0)} segundos")
-        print(f"  Prioridade:         {data.get('priority', 'N/A')}")
         
         geo_area = data.get('geographic_area', {})
         if geo_area:
@@ -416,7 +414,12 @@ class GroundControl:
         
         if not telemetry:
             print("Nenhum dado de telemetria disponível.")
+            print("\n" + "="*80)
             return
+        
+        # Mostrar apenas as telemetrias que realmente existem (não sempre o limite máximo)
+        num_entries = len(telemetry)
+        print(f"Mostrando {num_entries} registo(s) de telemetria:")
         
         for i, entry in enumerate(telemetry, 1):
             print(f"\n--- Registo {i} ---")
@@ -441,8 +444,8 @@ class GroundControl:
         # Missões ativas
         self.show_missions(status_filter='active')
         
-        # Última telemetria
-        self.show_telemetry(limit=5)
+        # Última telemetria (mostrar apenas as que existem, máximo 10)
+        self.show_telemetry(limit=10)
     
     def run_interactive(self):
         """Executa interface interativa do Ground Control."""

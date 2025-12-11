@@ -195,9 +195,11 @@ class ObservationAPI:
             status_filter = request.args.get('status', None)
             missions = []
             
-            # Missões ativas (em self.tasks)
+            # Missões em self.tasks (podem estar ativas ou na fila)
             for mission_id, mission_data in self.nms_server.tasks.items():
                 mission_info = self._format_mission(mission_id, mission_data)
+                # Só mostrar como "active" se realmente estiver em execução
+                # Missões na fila aparecem como "pending"
                 if status_filter is None or mission_info["status"] == status_filter:
                     missions.append(mission_info)
             
@@ -288,7 +290,12 @@ class ObservationAPI:
             
             telemetry_data = self._get_telemetry_data(limit, rover_filter)
             
-            return jsonify({"telemetry": telemetry_data}), 200
+            # Criar resposta sem cache
+            response = jsonify({"telemetry": telemetry_data})
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response, 200
         
         # Últimos dados de telemetria de um rover específico
         @self.app.route('/telemetry/<rover_id>', methods=['GET'])
@@ -373,14 +380,47 @@ class ObservationAPI:
                 mission_data = {}
         
         # Determinar status da missão
-        status = "active"
+        rover_id = mission_data.get("rover_id", "unknown")
+        
+        # Verificar primeiro se está concluída
+        status = "active"  # Default
         if mission_id in self.nms_server.missionProgress:
             progress = self.nms_server.missionProgress[mission_id]
             if isinstance(progress, dict):
                 for rover_progress in progress.values():
-                    if isinstance(rover_progress, dict) and rover_progress.get("status") == "completed":
-                        status = "completed"
-                        break
+                    if isinstance(rover_progress, dict):
+                        progress_status = rover_progress.get("status", "")
+                        if progress_status == "completed":
+                            status = "completed"
+                            break
+                        elif progress_status == "in_progress":
+                            # Esta missão está realmente em execução
+                            status = "active"
+                            break
+        
+        # Se não tem progresso "in_progress" e há outra missão do mesmo rover com progresso,
+        # esta missão está na fila (pending)
+        if status == "active" and mission_id not in self.nms_server.missionProgress:
+            # Verificar se há outra missão do mesmo rover com progresso "in_progress"
+            for other_id, other_data in self.nms_server.tasks.items():
+                if other_id != mission_id:
+                    if isinstance(other_data, str):
+                        try:
+                            other_data = json.loads(other_data)
+                        except:
+                            continue
+                    if other_data.get("rover_id") == rover_id:
+                        if other_id in self.nms_server.missionProgress:
+                            other_progress = self.nms_server.missionProgress[other_id]
+                            if isinstance(other_progress, dict):
+                                for rover_progress in other_progress.values():
+                                    if isinstance(rover_progress, dict):
+                                        if rover_progress.get("status") == "in_progress":
+                                            # Há outra missão em execução, esta está na fila
+                                            status = "pending"
+                                            break
+                                if status == "pending":
+                                    break
         
         mission_info = {
             "mission_id": mission_id,
@@ -388,13 +428,10 @@ class ObservationAPI:
             "task": mission_data.get("task", "unknown"),
             "status": status,
             "geographic_area": mission_data.get("geographic_area", {}),
-            "duration_minutes": mission_data.get("duration_minutes", 0),
-            "update_frequency_seconds": mission_data.get("update_frequency_seconds", 0)
+            "duration_minutes": mission_data.get("duration_minutes", 0)
         }
         
         # Adicionar campos opcionais se existirem
-        if "priority" in mission_data:
-            mission_info["priority"] = mission_data["priority"]
         if "instructions" in mission_data:
             mission_info["instructions"] = mission_data["instructions"]
         
@@ -402,7 +439,11 @@ class ObservationAPI:
     
     def _get_current_mission(self, rover_id: str) -> Optional[str]:
         """
-        Obtém a missão atual de um rover.
+        Obtém a missão atual de um rover (a que está realmente em execução).
+        
+        Como não há mais reporte de progresso via MissionLink, determina a missão atual
+        verificando se há missões ativas em tasks para o rover e se a telemetria indica
+        que está "em missão".
         
         Args:
             rover_id (str): ID do rover
@@ -410,6 +451,17 @@ class ObservationAPI:
         Returns:
             str or None: ID da missão atual ou None se não houver
         """
+        # Verificar telemetria mais recente para confirmar se está em missão
+        latest_telemetry = self._get_latest_telemetry(rover_id)
+        operational_status = None
+        if latest_telemetry:
+            operational_status = latest_telemetry.get("operational_status", "")
+        
+        # Se não está "em missão" na telemetria, não há missão ativa
+        if operational_status != "em missão":
+            return None
+        
+        # Procurar missão ativa em tasks para este rover
         for mission_id, mission_data in self.nms_server.tasks.items():
             if isinstance(mission_data, str):
                 try:
@@ -418,6 +470,18 @@ class ObservationAPI:
                     continue
             
             if mission_data.get("rover_id") == rover_id:
+                # Verificar se a missão não está concluída
+                # Se está em tasks e não está concluída em missionProgress, está ativa
+                if mission_id in self.nms_server.missionProgress:
+                    progress = self.nms_server.missionProgress[mission_id]
+                    if isinstance(progress, dict) and rover_id in progress:
+                        rover_progress = progress[rover_id]
+                        if isinstance(rover_progress, dict):
+                            status = rover_progress.get("status", "")
+                            if status == "completed":
+                                continue  # Missão concluída, procurar próxima
+                
+                # Missão encontrada e ativa
                 return mission_id
         
         return None
@@ -474,32 +538,81 @@ class ObservationAPI:
             print(f"Erro ao ler telemetria de {rover_id}: {e}")
             return None
     
-    def _get_telemetry_data(self, limit: int, rover_filter: Optional[str] = None) -> List[dict]:
+    def _get_telemetry_data(self, limit: int, rover_filter: Optional[str] = None, max_age_minutes: int = 5) -> List[dict]:
         """
         Obtém dados de telemetria (últimos N registos).
         
         Args:
             limit (int): Número máximo de registos
             rover_filter (str, optional): Filtrar por rover específico
+            max_age_hours (int): Idade máxima em horas para considerar telemetria (default: 2 horas)
             
         Returns:
             list: Lista de dados de telemetria
         """
+        # Limpar ficheiros antigos periodicamente (manter apenas os 50 mais recentes por rover)
+        self._cleanup_old_telemetry_files(max_files_per_rover=50)
+        
         telemetry_folder = self.nms_server.telemetryStream.storefolder
         telemetry_data = []
+        current_time = datetime.now().timestamp()
+        max_age_seconds = max_age_minutes * 60  # Converter minutos para segundos
         
         # Se filtro por rover, procurar apenas na pasta desse rover
         if rover_filter:
             rover_folder = os.path.join(telemetry_folder, rover_filter)
             if os.path.exists(rover_folder):
                 files = [os.path.join(rover_folder, f) for f in os.listdir(rover_folder) if f.endswith('.json')]
-                for file_path in sorted(files, key=os.path.getmtime, reverse=True)[:limit]:
+                # Ler TODOS os ficheiros primeiro (sem ordenação prévia)
+                for file_path in files:
                     try:
+                        file_mtime = os.path.getmtime(file_path)
                         with open(file_path, 'r') as f:
                             data = json.load(f)
-                            data["timestamp"] = datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat()
+                            # Garantir que há timestamp (usar do JSON ou do ficheiro)
+                            if "timestamp" not in data:
+                                # Se não há timestamp no JSON, usar data de modificação do ficheiro
+                                data["timestamp"] = datetime.fromtimestamp(file_mtime).isoformat()
+                            
+                            # Verificar idade do registo (filtrar por tempo)
+                            timestamp_str = data.get("timestamp", "")
+                            if timestamp_str:
+                                try:
+                                    if isinstance(timestamp_str, str):
+                                        timestamp_clean = timestamp_str.replace('Z', '').replace('+00:00', '').split('+')[0]
+                                        if '.' in timestamp_clean:
+                                            parts = timestamp_clean.split('.')
+                                            base = datetime.fromisoformat(parts[0])
+                                            microseconds = int(parts[1][:6].ljust(6, '0')) if len(parts) > 1 else 0
+                                            timestamp_dt = base.replace(microsecond=microseconds)
+                                        else:
+                                            timestamp_dt = datetime.fromisoformat(timestamp_clean)
+                                        timestamp_ts = timestamp_dt.timestamp()
+                                    else:
+                                        timestamp_ts = float(timestamp_str)
+                                    
+                                    # Filtrar por idade (apenas registos das últimas X horas)
+                                    age_seconds = current_time - timestamp_ts
+                                    if age_seconds > max_age_seconds:
+                                        continue  # Ignorar registos muito antigos
+                                except Exception:
+                                    # Se não conseguir parsear timestamp, usar file_mtime
+                                    age_seconds = current_time - file_mtime
+                                    if age_seconds > max_age_seconds:
+                                        continue
+                            else:
+                                # Se não há timestamp, usar file_mtime
+                                age_seconds = current_time - file_mtime
+                                if age_seconds > max_age_seconds:
+                                    continue
+                            
+                            # Garantir que rover_id está presente
+                            if "rover_id" not in data and rover_filter:
+                                data["rover_id"] = rover_filter
+                            # Adicionar também o mtime como fallback para ordenação
+                            data["_file_mtime"] = file_mtime
                             telemetry_data.append(data)
-                    except:
+                    except Exception:
                         continue
         else:
             # Procurar em todas as pastas de rovers
@@ -508,18 +621,149 @@ class ObservationAPI:
                     rover_folder = os.path.join(telemetry_folder, rover_id)
                     if os.path.isdir(rover_folder):
                         files = [os.path.join(rover_folder, f) for f in os.listdir(rover_folder) if f.endswith('.json')]
-                        for file_path in sorted(files, key=os.path.getmtime, reverse=True)[:limit]:
+                        # Ler TODOS os ficheiros primeiro (sem ordenação prévia)
+                        for file_path in files:
                             try:
+                                file_mtime = os.path.getmtime(file_path)
                                 with open(file_path, 'r') as f:
                                     data = json.load(f)
-                                    data["timestamp"] = datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat()
+                                    # Garantir que há timestamp (usar do JSON ou do ficheiro)
+                                    if "timestamp" not in data:
+                                        # Se não há timestamp no JSON, usar data de modificação do ficheiro
+                                        data["timestamp"] = datetime.fromtimestamp(file_mtime).isoformat()
+                                    
+                                    # Verificar idade do registo (filtrar por tempo)
+                                    timestamp_str = data.get("timestamp", "")
+                                    if timestamp_str:
+                                        try:
+                                            if isinstance(timestamp_str, str):
+                                                timestamp_clean = timestamp_str.replace('Z', '').replace('+00:00', '').split('+')[0]
+                                                if '.' in timestamp_clean:
+                                                    parts = timestamp_clean.split('.')
+                                                    base = datetime.fromisoformat(parts[0])
+                                                    microseconds = int(parts[1][:6].ljust(6, '0')) if len(parts) > 1 else 0
+                                                    timestamp_dt = base.replace(microsecond=microseconds)
+                                                else:
+                                                    timestamp_dt = datetime.fromisoformat(timestamp_clean)
+                                                timestamp_ts = timestamp_dt.timestamp()
+                                            else:
+                                                timestamp_ts = float(timestamp_str)
+                                            
+                                            # Filtrar por idade (apenas registos das últimas X horas)
+                                            age_seconds = current_time - timestamp_ts
+                                            if age_seconds > max_age_seconds:
+                                                continue  # Ignorar registos muito antigos
+                                        except Exception:
+                                            # Se não conseguir parsear timestamp, usar file_mtime
+                                            age_seconds = current_time - file_mtime
+                                            if age_seconds > max_age_seconds:
+                                                continue
+                                    else:
+                                        # Se não há timestamp, usar file_mtime
+                                        age_seconds = current_time - file_mtime
+                                        if age_seconds > max_age_seconds:
+                                            continue
+                                    
+                                    # Garantir que rover_id está presente
+                                    if "rover_id" not in data:
+                                        data["rover_id"] = rover_id
+                                    # Adicionar também o mtime como fallback para ordenação
+                                    data["_file_mtime"] = file_mtime
                                     telemetry_data.append(data)
-                            except:
+                            except Exception:
                                 continue
         
-        # Ordenar por timestamp e limitar
-        telemetry_data.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        # Ordenar por timestamp (mais recente primeiro) e limitar
+        # Usar timestamp do JSON se disponível, senão usar data de modificação do ficheiro
+        def get_sort_key(entry):
+            timestamp = entry.get("timestamp", "")
+            file_mtime = entry.get("_file_mtime", 0)
+            
+            if timestamp:
+                try:
+                    # Tentar converter para datetime para ordenação correta
+                    if isinstance(timestamp, str):
+                        # Remover timezone se presente
+                        timestamp_clean = timestamp.replace('Z', '').replace('+00:00', '').split('+')[0]
+                        # Tentar parse ISO format
+                        try:
+                            # ISO format pode ter microsegundos: YYYY-MM-DDTHH:MM:SS.ffffff
+                            if '.' in timestamp_clean:
+                                # Tem microsegundos
+                                parts = timestamp_clean.split('.')
+                                base = datetime.fromisoformat(parts[0])
+                                microseconds = int(parts[1][:6].ljust(6, '0')) if len(parts) > 1 else 0
+                                dt = base.replace(microsecond=microseconds)
+                            else:
+                                dt = datetime.fromisoformat(timestamp_clean)
+                            # Retornar como timestamp Unix para comparação consistente
+                            return dt.timestamp()
+                        except:
+                            # Se falhar, tentar formatos alternativos
+                            try:
+                                dt = datetime.strptime(timestamp_clean, "%Y-%m-%dT%H:%M:%S")
+                                return dt.timestamp()
+                            except:
+                                # Se tudo falhar, usar file_mtime como fallback
+                                return file_mtime if file_mtime > 0 else 0
+                    elif isinstance(timestamp, (int, float)):
+                        # Se for número (Unix timestamp), usar diretamente
+                        return float(timestamp)
+                except Exception:
+                    # Se falhar, usar file_mtime como fallback
+                    return file_mtime if file_mtime > 0 else 0
+            
+            # Se não há timestamp, usar file_mtime ou datetime mínimo
+            return file_mtime if file_mtime > 0 else datetime.min.timestamp()
+        
+        # Ordenar por timestamp (mais recente primeiro)
+        telemetry_data.sort(key=get_sort_key, reverse=True)
+        
+        # Remover campo auxiliar antes de retornar
+        for entry in telemetry_data:
+            entry.pop("_file_mtime", None)
+        
+        # Retornar apenas os N mais recentes
         return telemetry_data[:limit]
+    
+    def _cleanup_old_telemetry_files(self, max_files_per_rover=50):
+        """
+        Remove ficheiros de telemetria antigos, mantendo apenas os N mais recentes por rover.
+        Evita acumulação excessiva de ficheiros.
+        
+        Args:
+            max_files_per_rover (int): Número máximo de ficheiros a manter por rover
+        """
+        telemetry_folder = self.nms_server.telemetryStream.storefolder
+        
+        if not os.path.exists(telemetry_folder):
+            return
+        
+        try:
+            # Processar cada pasta de rover
+            for rover_id in os.listdir(telemetry_folder):
+                rover_folder = os.path.join(telemetry_folder, rover_id)
+                if not os.path.isdir(rover_folder):
+                    continue
+                
+                # Obter todos os ficheiros JSON
+                files = [os.path.join(rover_folder, f) for f in os.listdir(rover_folder) if f.endswith('.json')]
+                
+                if len(files) <= max_files_per_rover:
+                    continue  # Não precisa limpar
+                
+                # Ordenar por data de modificação (mais recente primeiro)
+                files.sort(key=os.path.getmtime, reverse=True)
+                
+                # Remover ficheiros antigos (manter apenas os N mais recentes)
+                files_to_remove = files[max_files_per_rover:]
+                for file_path in files_to_remove:
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+        except Exception:
+            pass  # Ignorar erros na limpeza
     
     def _get_last_telemetry_time(self, rover_id: str) -> Optional[str]:
         """

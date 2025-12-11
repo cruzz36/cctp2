@@ -29,7 +29,7 @@ def main():
     
     nms_ip = sys.argv[1]
     rover_id = sys.argv[2] if len(sys.argv) > 2 else "r1"
-    telemetry_interval = int(sys.argv[3]) if len(sys.argv) > 3 else 5
+    telemetry_interval = int(sys.argv[3]) if len(sys.argv) > 3 else 30  # Padrão: 30 segundos (telemetria contínua)
     
     print("="*60)
     print(f"ROVER {rover_id} - Iniciando...")
@@ -38,51 +38,55 @@ def main():
     print("="*60)
     
     try:
-        print(f"[DEBUG] start_rover: Criando instância NMS_Agent com Nave-Mãe em {nms_ip}")
         rover = NMS_Agent.NMS_Agent(nms_ip)
         rover.id = rover_id
-        print(f"[DEBUG] start_rover: Rover ID definido como {rover_id}")
         
         # Registo na Nave-Mãe
-        print(f"\n[DEBUG] start_rover: Iniciando processo de registo na Nave-Mãe {nms_ip}...")
         max_registration_retries = 5
         registration_success = False
         
         for attempt in range(1, max_registration_retries + 1):
             try:
-                print(f"[DEBUG] start_rover: Tentativa {attempt}/{max_registration_retries} de registo...")
                 rover.registerAgent(nms_ip)
                 print(f"[OK] Registado como {rover_id} na Nave-Mãe {nms_ip}")
                 registration_success = True
                 break
             except Exception as e:
                 if attempt < max_registration_retries:
-                    print(f"[AVISO] Tentativa {attempt}/{max_registration_retries} falhou: {e}")
-                    print(f"[DEBUG] start_rover: A tentar novamente em 2 segundos...")
                     time.sleep(2)
                 else:
                     print(f"[ERRO] Falha ao registar após {max_registration_retries} tentativas: {e}")
-                    print("[AVISO] Certifique-se de que:")
-                    print("  1. A Nave-Mãe está a correr (python3 start_nms.py)")
-                    print("  2. O IP da Nave-Mãe está correto (verificar: ping -c 2 10.0.1.10)")
-                    print("  3. As rotas de rede estão configuradas (ver Guia_CORE_Unificado.md secção 1.5)")
-                    print("  4. O IP forwarding está habilitado no Satélite")
-                    print("  5. A porta UDP 8080 está acessível")
                     import traceback
                     traceback.print_exc()
         
         if not registration_success:
             print("[AVISO] Continuando sem registo bem-sucedido...")
         
+        # Iniciar thread para receber missões via MissionLink
+        def mission_listener():
+            """Loop contínuo para receber e processar missões."""
+            while True:
+                try:
+                    rover.recvMissionLink()
+                except TimeoutError:
+                    # Timeout normal - continuar a escutar
+                    continue
+                except Exception:
+                    time.sleep(2)
+        
+        ml_thread = threading.Thread(target=mission_listener, daemon=True)
+        ml_thread.start()
+        time.sleep(0.5)
+        
         # Iniciar telemetria contínua
-        print(f"[...] A iniciar telemetria contínua...")
         rover.startContinuousTelemetry(nms_ip, interval_seconds=telemetry_interval)
         print(f"[OK] Telemetria contínua ativa (intervalo: {telemetry_interval}s)")
         
         print("="*60)
         print(f"Rover {rover_id} pronto!")
         print("="*60)
-        print("\nRover em operação. Pressione Ctrl+C para encerrar\n")
+        print("\nRover em operação. Aguardando missões...")
+        print("Pressione Ctrl+C para encerrar\n")
         
         # Manter rover a correr
         try:

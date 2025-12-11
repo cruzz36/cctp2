@@ -19,4 +19,4 @@ class Limit:
         NOTA: Se precisares de outro tamanho, passa via buffersize.
         """
         self.buffersize = buffersize  # Usa o valor passado (padrão 1024)
-        self.timeout = 5        # Timeout de 5 segundos para operações de rede (aumentado para lidar com latência)
+        self.timeout = 2        # Timeout de 2 segundos para operações de rede

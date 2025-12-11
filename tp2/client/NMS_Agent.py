@@ -3,6 +3,8 @@ from protocol import MissionLink,TelemetryStream
 import os
 import time
 import json
+import threading
+import math
 
 def validateMission(mission_data):
     """
@@ -14,12 +16,10 @@ def validateMission(mission_data):
         "rover_id": string (obrigatório),
         "geographic_area": dict (obrigatório),
         "task": string (obrigatório: capture_images|sample_collection|environmental_analysis|...),
-        "duration_minutes": integer (obrigatório, > 0),
-        "update_frequency_seconds": integer (obrigatório, > 0)
+        "duration_minutes": integer (obrigatório, > 0)
     }
     
     Campos opcionais:
-    - "priority": string (low|medium|high)
     - "instructions": string
     
     Args:
@@ -44,8 +44,7 @@ def validateMission(mission_data):
         "rover_id": str,
         "geographic_area": dict,
         "task": str,
-        "duration_minutes": (int, float),
-        "update_frequency_seconds": (int, float)
+        "duration_minutes": (int, float)
     }
     
     # Verificar presença e tipo dos campos obrigatórios
@@ -59,9 +58,6 @@ def validateMission(mission_data):
     # Validações específicas
     if mission_data["duration_minutes"] <= 0:
         return False, "duration_minutes deve ser maior que 0"
-    
-    if mission_data["update_frequency_seconds"] <= 0:
-        return False, "update_frequency_seconds deve ser maior que 0"
     
     # Validar geographic_area
     geo_area = mission_data["geographic_area"]
@@ -211,7 +207,10 @@ class NMS_Agent:
         # Estado de monitorização contínua
         self.telemetry_thread = None  # Thread para monitorização contínua
         self.telemetry_running = False  # Flag para controlar loop
-        self.telemetry_interval = 30  # Intervalo padrão em segundos
+        self.telemetry_interval = 30  # Intervalo padrão em segundos (conforme requisitos: telemetria contínua)
+        self.current_mission = None  # Missão atualmente em execução
+        self.mission_queue = []  # Fila de missões pendentes (rover executa uma de cada vez)
+        self.mission_executing = False  # Flag para indicar se há missão em execução
 
     # def sendMetrics(self,ip,filename:str):
     #     """
@@ -255,31 +254,19 @@ class NMS_Agent:
         Args:
             ip (str): Endereço IP da Nave-Mãe
         """
-        print(f"[DEBUG] register: Iniciando registo na Nave-Mãe {ip} (rover_id={self.id})")
-        # No registo, idMission = "000" porque ainda não há missão atribuída
-        print(f"[DEBUG] register: Enviando pedido de registo...")
         self.missionLink.send(ip,self.missionLink.port,self.missionLink.registerAgent,self.id,"000","\0")
-        print(f"[DEBUG] register: Aguardando confirmação de registo...")
         lista = self.missionLink.recv()
-        print(f"[DEBUG] register: Resposta recebida: idAgent={lista[0]}, ip={lista[4]}, message={lista[3]}")
-        # Bug fix: lista[2] é missionType (não flag), lista[0] é idAgent
-        # Quando servidor envia confirmação de registo, missionType será None ou vazio
-        # Validação correta: verificar se idAgent corresponde e se recebemos resposta do servidor correto
-        # Bug fix: Usar 'or' está correto - retransmitir se QUALQUER validação falhar
-        #          Mas vamos adicionar um limite de retries para evitar loops infinitos
         retries = 0
         max_retries = 10
         while (lista[0] != self.id or lista[4] != ip) and retries < max_retries:
             retries += 1
-            print(f"[DEBUG] register: Resposta inválida (esperado idAgent={self.id}, ip={ip}, recebido idAgent={lista[0]}, ip={lista[4]}). Retry {retries}/{max_retries}")
             self.missionLink.send(ip,self.missionLink.port,self.missionLink.registerAgent,self.id,"000","\0")
             lista = self.missionLink.recv()
-            print(f"[DEBUG] register: Nova resposta recebida: idAgent={lista[0]}, ip={lista[4]}, message={lista[3]}")
         
         if retries >= max_retries:
-            print(f"[ERRO] Máximo de tentativas ({max_retries}) atingido ao registar")
-        else:
-            print(f"[OK] Registado com sucesso na Nave-Mãe {ip} (resposta: {lista[3]})")
+            raise Exception(f"Máximo de tentativas ({max_retries}) atingido ao registar")
+        
+        print(f"[INFO] Rover {self.id} conectado à Nave-Mãe {ip}")
     
     def registerAgent(self, ip):
         """
@@ -302,28 +289,20 @@ class NMS_Agent:
         Returns:
             dict or None: Dicionário com dados da missão recebida, ou None se não houver missão disponível
         """
-        print(f"[DEBUG] requestMission: Solicitando missão à Nave-Mãe {ip} (rover_id={self.id})")
         # Enviar solicitação de missão
         self.missionLink.send(ip, self.missionLink.port, self.missionLink.requestMission, self.id, "000", "request")
-        print(f"[DEBUG] requestMission: Solicitação enviada, aguardando resposta...")
         
         # Aguardar resposta (pode ser missão ou mensagem de "sem missão disponível")
         try:
             response = self.missionLink.recv()
-            print(f"[DEBUG] requestMission: Resposta recebida: idAgent={response[0]}, idMission={response[1]}, missionType={response[2]}, message={response[3][:50] if len(response[3]) > 50 else response[3]}..., ip={response[4]}")
-            # response tem: [idAgent, idMission, missionType, message, ip]
             if response[2] == self.missionLink.taskRequest:
-                # Bug fix: Missão já está na primeira resposta (response[3])
-                #          Não fazer recv() novamente - extrair e validar diretamente
                 mission_message = response[3]
-                mission_id = response[1]  # idMission do protocolo
+                mission_id = response[1]
                 
                 # Validar formato da missão
                 is_valid, error_msg = validateMission(mission_message)
                 
                 if not is_valid:
-                    print(f"Erro: Missão recebida é inválida: {error_msg}")
-                    # Enviar ACK mesmo assim para não bloquear o servidor
                     self.missionLink.send(response[4], self.missionLink.port, None, self.id, mission_id, "invalid")
                     return None
                 
@@ -333,40 +312,23 @@ class NMS_Agent:
                         mission_data = json.loads(mission_message)
                     else:
                         mission_data = mission_message
-                except json.JSONDecodeError as e:
-                    print(f"Erro: Não foi possível fazer parse do JSON da missão: {e}")
+                except json.JSONDecodeError:
                     self.missionLink.send(response[4], self.missionLink.port, None, self.id, mission_id, "parse_error")
                     return None
                 
-                # Verificar se o rover_id corresponde
-                if mission_data.get("rover_id") != self.id:
-                    print(f"Aviso: Missão {mission_id} destinada a outro rover ({mission_data.get('rover_id')})")
-                    # Continuar mesmo assim - pode ser útil para debug
-                
                 # Armazenar missão validada
                 self.tasks[mission_id] = mission_data
-                print(f"[DEBUG] requestMission: Missão {mission_id} armazenada em self.tasks")
                 
                 # Enviar ACK de confirmação
-                print(f"[DEBUG] requestMission: Enviando ACK de confirmação para missão {mission_id}")
                 self.missionLink.send(response[4], self.missionLink.port, None, self.id, mission_id, mission_id)
-                print(f"[OK] requestMission: Missão {mission_id} recebida e confirmada")
                 
                 return mission_data
             elif response[2] == self.missionLink.noneType:
-                # Bug fix: Quando servidor envia com missionType=None, é codificado como "N" no protocolo
-                #          O recv() extrai isto como a string "N", não Python None
-                #          Verificar response[2] == "N" em vez de response[2] is None
-                # Sem missão disponível (mensagem será "no_mission")
                 if response[3] == "no_mission":
                     print(f"[INFO] requestMission: Nave-Mãe respondeu: sem missão disponível no momento")
-                else:
-                    print(f"[DEBUG] requestMission: Resposta inesperada com missionType=None: {response[3]}")
                 return None
         except Exception as e:
             print(f"[ERRO] requestMission: Erro ao solicitar missão: {e}")
-            import traceback
-            traceback.print_exc()
             return None
 
     def recvMissionLink(self):
@@ -382,7 +344,6 @@ class NMS_Agent:
             "geographic_area": {"x1": float, "y1": float, "x2": float, "y2": float},
             "task": string (obrigatório),
             "duration_minutes": integer (obrigatório, > 0),
-            "update_frequency_seconds": integer (obrigatório, > 0)
         }
         
         NOTA: O idAgent é usado apenas no handshake. Nas mensagens de dados,
@@ -391,135 +352,178 @@ class NMS_Agent:
         Returns:
             dict or None: Dicionário com dados da missão validada, ou None se não for missão válida
         """
-        print(f"[DEBUG] recvMissionLink: Aguardando mensagem do MissionLink...")
         lista = self.missionLink.recv()
-        print(f"[DEBUG] recvMissionLink: Mensagem recebida: idAgent={lista[0]}, idMission={lista[1]}, missionType={lista[2]}, ip={lista[4]}")
-        # lista tem: [idAgent, idMission, missionType, message, ip]
-        # idAgent é identificado pelo IP/porta do handshake
         
-        # missionType = tipo de operação do protocolo (R, T, M, Q, P)
-        # Quando missionType="T" (taskRequest), o campo 'message' contém um JSON
-        # que inclui o campo "task" com um dos 3 valores: capture_images, sample_collection, environmental_analysis
         if lista[2] == self.missionLink.taskRequest:
             mission_message = lista[3]
-            mission_id = lista[1]  # idMission do protocolo
-            print(f"[DEBUG] recvMissionLink: Recebida missão {mission_id}, validando formato...")
+            mission_id = lista[1]
             
             # Validar formato da missão
             is_valid, error_msg = validateMission(mission_message)
             
             if not is_valid:
-                print(f"[ERRO] recvMissionLink: Missão recebida é inválida: {error_msg}")
-                # Enviar ACK mesmo assim para não bloquear o servidor
-                # Bug fix: ackkey é uma flag, não um missionType. Usar None como missionType
-                print(f"[DEBUG] recvMissionLink: Enviando ACK 'invalid' para {lista[4]}")
                 self.missionLink.send(lista[4], self.missionLink.port, None, self.id, mission_id, "invalid")
                 return None
             
-            print(f"[DEBUG] recvMissionLink: Missão validada, fazendo parse do JSON...")
             # Parse do JSON da missão
             try:
                 if isinstance(mission_message, str):
                     mission_data = json.loads(mission_message)
                 else:
                     mission_data = mission_message
-                print(f"[DEBUG] recvMissionLink: JSON parseado com sucesso")
-            except json.JSONDecodeError as e:
-                print(f"[ERRO] recvMissionLink: Não foi possível fazer parse do JSON da missão: {e}")
-                # Bug fix: ackkey é uma flag, não um missionType. Usar None como missionType
-                print(f"[DEBUG] recvMissionLink: Enviando ACK 'parse_error' para {lista[4]}")
+            except json.JSONDecodeError:
                 self.missionLink.send(lista[4], self.missionLink.port, None, self.id, mission_id, "parse_error")
                 return None
             
-            # Verificar se o rover_id corresponde
-            if mission_data.get("rover_id") != self.id:
-                print(f"[AVISO] recvMissionLink: Missão {mission_id} destinada a outro rover ({mission_data.get('rover_id')}), mas continuando...")
-                # Continuar mesmo assim - pode ser útil para debug
-            
             # Armazenar missão validada
             self.tasks[mission_id] = mission_data
-            print(f"[DEBUG] recvMissionLink: Missão {mission_id} armazenada em self.tasks")
-            
-            # Extrair informações da missão para processamento
-            print(f"[OK] Missão recebida e validada:")
-            print(f"  ID: {mission_data.get('mission_id')}")
-            print(f"  Tarefa: {mission_data.get('task')}")
-            print(f"  Duração: {mission_data.get('duration_minutes')} minutos")
-            print(f"  Frequência de atualização: {mission_data.get('update_frequency_seconds')} segundos")
-            print(f"  Área geográfica: ({mission_data['geographic_area'].get('x1')}, {mission_data['geographic_area'].get('y1')}) a ({mission_data['geographic_area'].get('x2')}, {mission_data['geographic_area'].get('y2')})")
             
             # Enviar ACK de confirmação
-            print(f"[DEBUG] recvMissionLink: Enviando ACK de confirmação para {lista[4]}")
-            # Bug fix: ackkey é uma flag, não um missionType. Usar None como missionType
             self.missionLink.send(lista[4], self.missionLink.port, None, self.id, mission_id, mission_id)
-            print(f"[DEBUG] recvMissionLink: ACK enviado")
+            
+            # Verificar se já há missão em execução
+            if self.mission_executing:
+                self.mission_queue.append(mission_data)
+                print(f"[INFO] Missão {mission_id} adicionada à fila")
+            else:
+                self.mission_executing = True
+                self.current_mission = mission_data
+                print(f"[INFO] Missão ID: {mission_id} recebida - iniciando execução")
+                mission_thread = threading.Thread(target=self.executeMission, args=(mission_data, self.serverAddress), daemon=True)
+                mission_thread.start()
             
             return mission_data
         
-        print(f"[DEBUG] recvMissionLink: Mensagem recebida não é uma missão (missionType={lista[2]}), retornando None")
         return None
-
-    def reportMissionProgress(self, ip, mission_id, progress_data):
+    
+    def executeMission(self, mission_data, server_ip):
         """
-        Reporta o progresso de uma missão à Nave-Mãe.
-        Implementa o requisito: "O rover deve reportar o progresso da missão de acordo 
-        com parâmetros definidos na própria missão."
-        
-        Formato de progress_data:
-        {
-            "mission_id": string (obrigatório),
-            "progress_percent": integer (0-100, obrigatório),
-            "status": string (obrigatório: "in_progress"|"completed"|"failed"|"paused"),
-            "current_position": {"x": float, "y": float} (opcional),
-            "events": list (opcional, lista de eventos ocorridos),
-            "samples_collected": integer (opcional, para tarefas de coleta),
-            "images_captured": integer (opcional, para tarefas de captura),
-            "time_elapsed_minutes": float (opcional),
-            "estimated_completion_minutes": float (opcional)
-        }
+        Executa uma missão recebida, atualizando posição e enviando telemetria periodicamente.
         
         Args:
-            ip (str): Endereço IP da Nave-Mãe
-            mission_id (str): Identificador da missão
-            progress_data (dict): Dicionário com dados de progresso
-            
-        Returns:
-            bool: True se progresso foi reportado com sucesso, False caso contrário
+            mission_data (dict): Dicionário com dados da missão
+            server_ip (str): Endereço IP da Nave-Mãe
         """
-        # Validar campos obrigatórios
-        if "mission_id" not in progress_data:
-            progress_data["mission_id"] = mission_id
+        mission_id = mission_data.get("mission_id", "unknown")
+        duration_minutes = mission_data.get("duration_minutes", 30)
+        geographic_area = mission_data.get("geographic_area", {})
+        task = mission_data.get("task", "unknown")
         
-        if "progress_percent" not in progress_data:
-            print("Erro: progress_percent é obrigatório")
-            return False
+        print(f"[INFO] Executando missão {mission_id} ({task}, {duration_minutes}min)")
         
-        if "status" not in progress_data:
-            print("Erro: status é obrigatório")
-            return False
+        # Extrair coordenadas da área geográfica
+        x1 = geographic_area.get("x1", 0.0)
+        y1 = geographic_area.get("y1", 0.0)
+        x2 = geographic_area.get("x2", 100.0)
+        y2 = geographic_area.get("y2", 100.0)
         
-        # Converter para JSON
-        progress_json = json.dumps(progress_data)
+        # Calcular centro da área como destino inicial
+        center_x = (x1 + x2) / 2.0
+        center_y = (y1 + y2) / 2.0
         
-        # Enviar reporte de progresso
-        try:
-            self.missionLink.send(ip, self.missionLink.port, self.missionLink.reportProgress, self.id, mission_id, progress_json)
+        # Estado inicial: mover para a área da missão
+        self.updateOperationalStatus("a caminho")
+        self.updateVelocity(5.0)  # 5 m/s
+        
+        # Calcular direção para o centro da área
+        current_x = self.position["x"]
+        current_y = self.position["y"]
+        dx = center_x - current_x
+        dy = center_y - current_y
+        distance = (dx**2 + dy**2)**0.5
+        
+        if distance > 0.1:
+            direction_rad = math.atan2(dy, dx)
+            direction_deg = math.degrees(direction_rad)
+            self.updateDirection(direction_deg)
+        
+        # Simular movimento para a área da missão
+        steps_to_area = int(distance / 5.0) + 1  # Passos de 5 metros
+        for step in range(steps_to_area):
+            if distance > 0.1:
+                # Mover gradualmente em direção ao centro
+                progress = (step + 1) / steps_to_area
+                new_x = current_x + dx * progress
+                new_y = current_y + dy * progress
+                self.updatePosition(new_x, new_y, 0.0)
+            time.sleep(0.5)  # Pequeno delay para simular movimento
+        
+        # Chegou à área da missão - iniciar execução
+        self.updateOperationalStatus("em missão")
+        self.updateVelocity(2.0)  # Velocidade reduzida durante execução
+        
+        # Calcular número de atualizações durante a missão (usar intervalo fixo de 30s)
+        total_duration_seconds = duration_minutes * 60
+        update_interval_seconds = 30  # Intervalo fixo de 30 segundos (mesmo da telemetria contínua)
+        num_updates = max(1, int(total_duration_seconds / update_interval_seconds))
+        
+        # Executar missão com atualizações periódicas de posição e estado
+        # A telemetria contínua (30s) continua a correr em paralelo
+        start_time = time.time()
+        
+        # Padrão de movimento dentro da área (exploração em grid)
+        grid_steps_x = 5
+        grid_steps_y = 5
+        step_size_x = (x2 - x1) / grid_steps_x
+        step_size_y = (y2 - y1) / grid_steps_y
+        
+        for update_idx in range(num_updates):
+            elapsed_time = time.time() - start_time
+            progress_percent = min(100, int((elapsed_time / total_duration_seconds) * 100))
             
-            # Aguardar confirmação
-            response = self.missionLink.recv()
-            # Bug fix: Quando servidor envia com missionType=None, é codificado como "N" no protocolo
-            #          O recv() extrai isto como a string "N", não Python None
-            #          Verificar response[2] == "N" em vez de response[2] is None
-            if response[2] == self.missionLink.noneType and response[3] in ["progress_received", "Registered", "Already registered"]:
-                print(f"Progresso da missão {mission_id} reportado com sucesso")
-                return True
-            else:
-                print(f"Falha ao reportar progresso: resposta inesperada (missionType={response[2]}, message={response[3]})")
-                return False
-        except Exception as e:
-            print(f"Erro ao reportar progresso: {e}")
-            return False
+            # Calcular posição atual na área (movimento em grid)
+            grid_x = (update_idx % grid_steps_x)
+            grid_y = (update_idx // grid_steps_x) % grid_steps_y
+            
+            mission_x = x1 + grid_x * step_size_x
+            mission_y = y1 + grid_y * step_size_y
+            
+            # Garantir que está dentro dos limites
+            mission_x = max(x1, min(x2, mission_x))
+            mission_y = max(y1, min(y2, mission_y))
+            
+            # Atualizar posição
+            self.updatePosition(mission_x, mission_y, 0.0)
+            
+            # Atualizar bateria (diminui gradualmente)
+            battery_level = max(20.0, 100.0 - (elapsed_time / total_duration_seconds) * 30.0)
+            self.updateBattery(battery_level)
+            
+            # Atualizar temperatura (aumenta ligeiramente durante operação)
+            temperature = 20.0 + (elapsed_time / total_duration_seconds) * 15.0
+            self.updateTemperature(temperature)
+            
+            # NÃO enviar telemetria aqui - a telemetria contínua (30s) já faz isso
+            
+            # Aguardar até próxima atualização (intervalo fixo de 30s)
+            if update_idx < num_updates - 1:
+                time.sleep(update_interval_seconds)
         
+        # Missão concluída
+        self.updateOperationalStatus("parado")
+        self.updateVelocity(0.0)
+        
+        # A telemetria contínua (30s) irá mostrar o estado "parado" automaticamente
+        
+        print(f"[OK] Missão {mission_id} concluída")
+        
+        # Remover missão da lista de tarefas ativas
+        if mission_id in self.tasks:
+            del self.tasks[mission_id]
+        
+        # Limpar missão atual e verificar se há missões na fila
+        if self.current_mission and self.current_mission.get("mission_id") == mission_id:
+            self.current_mission = None
+            self.mission_executing = False
+            
+            # Se há missões na fila, executar a próxima
+            if self.mission_queue:
+                next_mission = self.mission_queue.pop(0)
+                self.mission_executing = True
+                self.current_mission = next_mission
+                print(f"[INFO] Iniciando próxima missão da fila: {next_mission.get('mission_id')}")
+                next_thread = threading.Thread(target=self.executeMission, args=(next_mission, server_ip), daemon=True)
+                next_thread.start()
 
     def sendTelemetry(self,ip,message):
         """
@@ -568,10 +572,14 @@ class NMS_Agent:
             dict: Dicionário com mensagem de telemetria completa e validada
         """
         # Criar estrutura base com campos obrigatórios
+        import time
+        from datetime import datetime
+        
         telemetry = {
             "rover_id": self.id,
             "position": self.position.copy(),  # Cópia para não modificar original
-            "operational_status": self.operational_status
+            "operational_status": self.operational_status,
+            "timestamp": datetime.now().isoformat()  # Adicionar timestamp ISO 8601
         }
         
         # Adicionar campos opcionais
@@ -620,45 +628,40 @@ class NMS_Agent:
         Returns:
             bool: True se telemetria foi criada e enviada com sucesso, False em caso de erro
         """
-        print(f"[DEBUG] createAndSendTelemetry: Criando telemetria para {server_ip} (rover_id={self.id})")
         try:
             # Criar mensagem de telemetria
             telemetry = self.createTelemetryMessage(metrics)
-            print(f"[DEBUG] createAndSendTelemetry: Mensagem de telemetria criada (rover_id={telemetry.get('rover_id')}, status={telemetry.get('operational_status')})")
             
             # Gerar nome do ficheiro se não fornecido
             if filename is None:
-                timestamp = int(time.time())
-                filename = f"telemetry_{self.id}_{timestamp}.json"
+                # Usar timestamp com microsegundos para evitar colisões
+                import time as time_module
+                timestamp = time_module.time()  # Float com microsegundos
+                timestamp_str = f"{timestamp:.6f}".replace('.', '_')  # Remover ponto decimal
+                filename = f"telemetry_{self.id}_{timestamp_str}.json"
             
             # Garantir que filename está na pasta correta
             if not os.path.dirname(filename):
                 filename = os.path.join(".", filename)
             
             # Salvar em ficheiro JSON
-            print(f"[DEBUG] createAndSendTelemetry: Salvando telemetria em {filename}")
             with open(filename, "w") as f:
                 json.dump(telemetry, f, indent=2)
-            print(f"[DEBUG] createAndSendTelemetry: Ficheiro salvo, enviando via TelemetryStream...")
             
             # Enviar via TelemetryStream
             success = self.sendTelemetry(server_ip, filename)
             
             if success:
-                print(f"[DEBUG] createAndSendTelemetry: Telemetria enviada com sucesso, removendo ficheiro temporário...")
-                # Opcional: remover ficheiro após envio bem-sucedido
+                # Remover ficheiro após envio bem-sucedido
                 try:
                     os.remove(filename)
-                    print(f"[DEBUG] createAndSendTelemetry: Ficheiro {filename} removido")
                 except:
-                    pass  # Ignorar erro ao remover
+                    pass
             
             return success
             
         except Exception as e:
-            print(f"[ERRO] createAndSendTelemetry: Erro ao criar e enviar telemetria: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[ERRO] Erro ao criar e enviar telemetria: {e}")
             return False
     
     def updatePosition(self, x, y, z=0.0):
@@ -757,46 +760,38 @@ class NMS_Agent:
         import threading
         
         if self.telemetry_running:
-            print("[AVISO] Monitorização contínua já está em execução")
             return False
         
-        print(f"[DEBUG] startContinuousTelemetry: Iniciando telemetria contínua (intervalo={interval_seconds}s, server_ip={server_ip})")
         self.telemetry_interval = interval_seconds
         self.telemetry_running = True
         
         def telemetry_loop():
-            """Loop interno para envio periódico de telemetria."""
-            iteration = 0
-            print(f"[DEBUG] telemetry_loop: Thread iniciada, aguardando {self.telemetry_interval}s antes do primeiro envio...")
+            """Loop interno para envio periódico de telemetria contínua.
+            
+            Conforme requisitos do PDF: "Os rovers devem reportar dados de monitorização 
+            continuamente para garantir que estão a operar corretamente."
+            """
             time.sleep(self.telemetry_interval)  # Aguardar intervalo antes do primeiro envio
             while self.telemetry_running:
                 try:
-                    iteration += 1
-                    filename = f"telemetry_{self.id}_{int(time.time())}.json"
-                    print(f"[DEBUG] telemetry_loop: Iteração {iteration}, criando e enviando telemetria...")
+                    # Usar timestamp com microsegundos para evitar colisões entre telemetria contínua e de missão
+                    timestamp = time.time()  # Float com microsegundos
+                    timestamp_str = f"{timestamp:.6f}".replace('.', '_')  # Remover ponto decimal
+                    filename = f"telemetry_{self.id}_{timestamp_str}.json"
                     success = self.createAndSendTelemetry(server_ip, None, filename)
                     
                     if success:
-                        print(f"[OK] [Telemetria {iteration}] Enviada com sucesso para {server_ip}")
-                    else:
-                        print(f"[ERRO] [Telemetria {iteration}] Falha ao enviar para {server_ip} (verificar conectividade)")
+                        print(f"[INFO] Telemetria enviada para {server_ip}")
                     
-                    # Aguardar intervalo antes do próximo envio
-                    print(f"[DEBUG] telemetry_loop: Aguardando {self.telemetry_interval}s até próximo envio...")
                     time.sleep(self.telemetry_interval)
                     
                 except Exception as e:
-                    print(f"[ERRO] telemetry_loop: Erro no loop de telemetria (iteração {iteration}): {e}")
-                    import traceback
-                    traceback.print_exc()
                     # Continuar mesmo em caso de erro
                     time.sleep(self.telemetry_interval)
         
         # Criar e iniciar thread
         self.telemetry_thread = threading.Thread(target=telemetry_loop, daemon=True)
         self.telemetry_thread.start()
-        
-        print(f"Monitorização contínua de telemetria iniciada (intervalo: {interval_seconds}s)")
         return True
     
     def stopContinuousTelemetry(self):
