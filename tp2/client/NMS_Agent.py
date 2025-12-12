@@ -241,6 +241,11 @@ class NMS_Agent:
         self.current_mission = None  # Missão atualmente em execução
         self.mission_queue = []  # Fila de missões pendentes (rover executa uma de cada vez)
         self.mission_executing = False  # Flag para indicar se há missão em execução
+        
+        # Contador de tentativas consecutivas falhadas para evitar loops infinitos
+        self.consecutive_request_failures = 0
+        self.max_consecutive_failures = 5  # Máximo de tentativas consecutivas antes de parar
+        self.last_request_failure_time = 0  # Timestamp da última falha
 
     # def sendMetrics(self,ip,filename:str):
     #     """
@@ -322,6 +327,22 @@ class NMS_Agent:
         Returns:
             bool: True se o pedido foi enviado com sucesso, False caso contrário
         """
+        # Verificar se excedemos o limite de tentativas consecutivas falhadas
+        if self.consecutive_request_failures >= self.max_consecutive_failures:
+            current_time = time.time()
+            # Backoff exponencial: esperar 2^failures segundos (máximo 60s)
+            backoff_time = min(60, 2 ** self.consecutive_request_failures)
+            time_since_last_failure = current_time - self.last_request_failure_time
+            
+            if time_since_last_failure < backoff_time:
+                remaining = backoff_time - time_since_last_failure
+                print(f"[AVISO] Muitas tentativas consecutivas falhadas ({self.consecutive_request_failures}/{self.max_consecutive_failures}). "
+                      f"Aguardando {remaining:.1f}s antes de tentar novamente (backoff exponencial)")
+                time.sleep(remaining)
+            
+            # Reset contador após backoff para permitir nova tentativa
+            self.consecutive_request_failures = 0
+        
         # Delay maior para garantir que a Nave-Mãe está pronta e evitar conflitos
         time.sleep(1.0)
         
@@ -331,6 +352,8 @@ class NMS_Agent:
             try:
                 # Enviar apenas o pedido - a resposta virá através do recvMissionLink()
                 self.missionLink.send(ip, self.missionLink.port, self.missionLink.requestMission, self.id, "000", "request")
+                # Sucesso - reset contador de falhas
+                self.consecutive_request_failures = 0
                 return True
             except TimeoutError as e:
                 if attempt < max_retries - 1:
@@ -339,6 +362,8 @@ class NMS_Agent:
                     continue
                 else:
                     print(f"[ERRO] requestMission: Timeout após {max_retries} tentativas: {e}")
+                    self.consecutive_request_failures += 1
+                    self.last_request_failure_time = time.time()
                     return False
             except Exception as e:
                 if attempt < max_retries - 1:
@@ -347,8 +372,12 @@ class NMS_Agent:
                     continue
                 else:
                     print(f"[ERRO] requestMission: Erro ao solicitar missão após {max_retries} tentativas: {e}")
+                    self.consecutive_request_failures += 1
+                    self.last_request_failure_time = time.time()
                     return False
         
+        self.consecutive_request_failures += 1
+        self.last_request_failure_time = time.time()
         return False
 
     def recvMissionLink(self):
@@ -688,10 +717,15 @@ class NMS_Agent:
                 break
             except Exception as e:
                 if retry < max_retries - 1:
-                    print(f"[INFO] Tentativa {retry + 1}/{max_retries} de reportar conclusão falhou, a tentar novamente...")
-                    time.sleep(2)  # Delay maior entre tentativas
+                    # Backoff exponencial: 2s, 4s, 8s
+                    backoff_delay = 2 ** (retry + 1)
+                    print(f"[INFO] Tentativa {retry + 1}/{max_retries} de reportar conclusão falhou, a tentar novamente em {backoff_delay}s...")
+                    time.sleep(backoff_delay)
                 else:
                     print(f"[ERRO] Erro ao reportar conclusão da missão após {max_retries} tentativas: {e}")
+                    # Adicionar delay após falha completa para evitar tentativas imediatas de solicitar próxima missão
+                    print(f"[INFO] Aguardando 5s antes de continuar após falha ao reportar conclusão...")
+                    time.sleep(5)
         
         # Atualizar estado para "parado"
         self.updateOperationalStatus("parado")
@@ -730,8 +764,19 @@ class NMS_Agent:
                     else:
                         # Não foi possível enviar o pedido
                         print(f"[INFO] Não foi possível solicitar próxima missão")
+                        # Adicionar delay antes de tentar novamente para evitar loop infinito
+                        # O delay será maior se houver muitas falhas consecutivas (backoff exponencial)
+                        if self.consecutive_request_failures < self.max_consecutive_failures:
+                            backoff_delay = min(30, 5 * self.consecutive_request_failures)  # 5s, 10s, 15s, 20s, 25s, max 30s
+                            print(f"[INFO] Aguardando {backoff_delay}s antes de tentar solicitar próxima missão novamente...")
+                            time.sleep(backoff_delay)
+                        else:
+                            print(f"[AVISO] Limite de tentativas consecutivas atingido ({self.max_consecutive_failures}). "
+                                  f"Parando tentativas de solicitar próxima missão. O rover continuará a enviar telemetria.")
                 except Exception as e:
                     print(f"[ERRO] Erro ao solicitar próxima missão: {e}")
+                    # Adicionar delay mesmo em caso de exceção
+                    time.sleep(10)
 
     def sendTelemetry(self,ip,message):
         """
