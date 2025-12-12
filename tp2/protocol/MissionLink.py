@@ -725,9 +725,11 @@ class MissionLink:
                         lista[ackPos] == str(seq) and
                         lista[idMissionPos] == idMission  # Validação de segurança: verifica idMission
                     ):
+                        # ACK recebido confirma que o chunk foi recebido
+                        # Incrementar seq para o próximo chunk a enviar
+                        # NOTA: ack não muda aqui porque não estamos recebendo dados do outro lado
                         seq += 1
-                        ack = seq
-                        print(f"[DEBUG] send: Nome do ficheiro confirmado (ACK recebido, seq={seq})")
+                        print(f"[DEBUG] send: Nome do ficheiro confirmado (ACK recebido, próximo seq={seq})")
                         break
                 except socket.timeout:
                     filename_retries += 1
@@ -883,9 +885,11 @@ class MissionLink:
                             lista[flagPos] == self.ackkey and
                             lista[idMissionPos] == idMission  # Validação de segurança: verifica idMission
                             ):
+                            # ACK recebido confirma que a mensagem foi recebida
+                            # Incrementar seq para o próximo pacote (FIN)
+                            # NOTA: ack não muda aqui porque não estamos recebendo dados do outro lado
                             seq += 1
-                            ack = seq
-                            print(f"[DEBUG] send: ACK da mensagem recebido (seq={seq}), iniciando fechamento de conexão")
+                            print(f"[DEBUG] send: ACK da mensagem recebido (próximo seq={seq}), iniciando fechamento de conexão")
                             self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                             print(f"[DEBUG] send: FIN enviado (seq={seq}), aguardando FIN-ACK")
                             # Fechamento bidirecional completo (4-way handshake)
@@ -1217,9 +1221,11 @@ class MissionLink:
                     #          (ex: if lista[2] == self.missionLink.taskRequest falhará mesmo que uma mensagem tenha sido recebida)
                     #          Solução: missionType é atualizado aqui quando uma mensagem válida é finalmente recebida
                     missionType = lista[missionTypePos]
-                    seq += 1
-                    ack = seq
-                    print(f"[DEBUG] recv: Primeira mensagem válida - missionType={missionType}, idMission={idMission}, seq={seq}")
+                    # ACK deve reconhecer o chunk que acabamos de receber (antes de incrementar seq)
+                    received_seq_num = int(lista[seqPos])
+                    ack = received_seq_num  # ACK reconhece o chunk recebido
+                    seq += 1  # Incrementar seq para o próximo chunk esperado
+                    print(f"[DEBUG] recv: Primeira mensagem válida - missionType={missionType}, idMission={idMission}, seq={seq}, ack={ack}")
                     if lista[messagePos].endswith(".json"):
                         # É um ficheiro
                         fileName = lista[messagePos]
@@ -1353,10 +1359,13 @@ class MissionLink:
                             print(f"[DEBUG] recv: Chunk anterior adicionado à mensagem (tamanho total agora: {len(message)} bytes)")
                         prevMessage = lista[messagePos]
 
-                        # Increase the seq num to the new value (+1)
+                        # ACK deve reconhecer o chunk que acabamos de receber (antes de incrementar seq)
+                        # O ACK indica "recebi até o seq X", então ack = seq recebido
+                        received_seq_num = int(lista[seqPos])
+                        ack = received_seq_num  # ACK reconhece o chunk que acabamos de receber
+                        
+                        # Increase the seq num to the new value (+1) para o próximo chunk esperado
                         seq += 1
-                        # The acknowledge number becomnes the same as the new sequence number
-                        ack = seq
                         # The new acknowledge number is put in the list of fields
                         lista[ackPos] = str(ack)
 
@@ -1383,9 +1392,9 @@ class MissionLink:
                             self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,fin_ack_seq,fin_ack,self.eofkey),(ip,port))
                             
                             # Passo 3: Enviar nosso próprio FIN
+                            # Incrementar seq para o FIN (ack permanece o mesmo - reconhece o FIN recebido)
                             seq += 1
-                            ack = seq
-                            print(f"[DEBUG] recv: Enviando nosso próprio FIN (seq={seq})")
+                            print(f"[DEBUG] recv: Enviando nosso próprio FIN (seq={seq}, ack={ack})")
                             self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                             
                             # Passo 4: Aguardar ACK do nosso FIN
@@ -1458,10 +1467,11 @@ class MissionLink:
                                 if received_seq < expected_seq:
                                     # Chunk duplicado - já foi processado, enviar ACK para parar retransmissões
                                     print(f"[DUPLICAÇÃO] Chunk duplicado recebido (seq={received_seq}, esperado={expected_seq}) - enviando ACK para parar retransmissões")
-                                    # Enviar ACK confirmando que já recebemos esse chunk
-                                    # O ACK deve ter o seq atual (não incrementado) e ack = received_seq + 1 (próximo seq esperado)
-                                    duplicate_ack_seq = seq  # Nosso seq atual
-                                    duplicate_ack = received_seq + 1  # Próximo seq que esperamos após esse chunk
+                                    # Enviar ACK confirmando que já recebemos esse chunk e todos os anteriores
+                                    # O ACK deve indicar o último seq que realmente recebemos (seq atual, que é o último processado)
+                                    # Se já processamos até seq=Y, o ACK deve ser ack=Y (não Y+1, pois Y+1 ainda não foi recebido)
+                                    duplicate_ack_seq = seq  # Nosso seq atual (último seq processado)
+                                    duplicate_ack = seq  # ACK reconhece até o último seq que processamos (não received_seq+1)
                                     self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,duplicate_ack_seq,duplicate_ack,self.eofkey),(ip,port))
                                 elif received_seq > expected_seq:
                                     # Chunk futuro - ainda não chegou o chunk esperado
@@ -1530,6 +1540,8 @@ class MissionLink:
             # Usar with para garantir fechamento do ficheiro mesmo em caso de erro
             with open(self.storeFolder + fileName,"w") as file:
                 previous = None
+                file_chunk_retries = 0
+                max_file_chunk_retries = 20  # Limite máximo de retransmissões antes de desistir
                 while True:
                     try:
                         text,(ip,port) = self.sock.recvfrom(self.limit.buffersize)
