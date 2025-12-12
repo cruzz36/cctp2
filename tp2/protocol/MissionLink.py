@@ -43,6 +43,22 @@ class MissionLink:
             self.storeFolder = storeFolder
         else:
             self.storeFolder = storeFolder + "/"
+        
+        # ============================================================
+        # TRATAMENTO DE DELAYS E JITTER
+        # ============================================================
+        # RTT tracking para timeout adaptativo (tratamento de delays variáveis)
+        # RTT (Round Trip Time) é medido para cada conexão e usado para calcular timeout dinâmico
+        self.rtt_samples = {}  # {(ip, port): [rtt1, rtt2, ...]} - amostras de RTT por conexão
+        self.rtt_estimated = {}  # {(ip, port): float} - RTT estimado (média ponderada) por conexão
+        self.rtt_variance = {}  # {(ip, port): float} - Variância do RTT (para jitter) por conexão
+        self.max_rtt_samples = 10  # Número máximo de amostras a manter por conexão
+        
+        # Buffer de reordenação para tratamento de jitter (pacotes fora de ordem)
+        # Armazena pacotes recebidos fora de ordem até que possam ser processados em sequência
+        self.reorder_buffer = {}  # {(ip, port): {seq: (chunk_data, timestamp)}} - buffer por conexão
+        self.max_reorder_buffer_size = 10  # Número máximo de pacotes a guardar no buffer de reordenação
+        self.max_reorder_wait_time = 5.0  # Tempo máximo (segundos) para aguardar pacote faltante antes de descartar buffer
         # ============================================================
         # TIPOS DE OPERAÇÃO DO PROTOCOLO (missionType)
         # ============================================================
@@ -78,6 +94,159 @@ class MissionLink:
         # Constante para fim de mensagem - melhora manutenibilidade
         self.eofkey = '\0'
 
+    def _update_rtt(self, connection_key, rtt_sample):
+        """
+        Atualiza estimativa de RTT usando algoritmo de média ponderada exponencial (EWMA).
+        Também calcula variância para estimar jitter.
+        
+        Algoritmo similar ao TCP: RTT_estimated = α * RTT_estimated + (1-α) * RTT_sample
+        onde α = 0.875 (padrão TCP)
+        
+        Args:
+            connection_key (tuple): (ip, port) identificando a conexão
+            rtt_sample (float): Amostra de RTT em segundos
+        """
+        if connection_key not in self.rtt_samples:
+            self.rtt_samples[connection_key] = []
+            self.rtt_estimated[connection_key] = rtt_sample
+            self.rtt_variance[connection_key] = 0.0
+            print(f"[RTT] Primeira medição RTT para {connection_key[0]}:{connection_key[1]} = {rtt_sample:.3f}s")
+        else:
+            # Adicionar amostra
+            self.rtt_samples[connection_key].append(rtt_sample)
+            # Manter apenas últimas N amostras
+            if len(self.rtt_samples[connection_key]) > self.max_rtt_samples:
+                self.rtt_samples[connection_key].pop(0)
+            
+            # Calcular RTT estimado usando EWMA (α = 0.875, como TCP)
+            alpha = 0.875
+            old_rtt = self.rtt_estimated[connection_key]
+            self.rtt_estimated[connection_key] = alpha * old_rtt + (1 - alpha) * rtt_sample
+            
+            # Calcular variância (jitter) usando diferença entre amostra e estimativa
+            deviation = abs(rtt_sample - old_rtt)
+            old_variance = self.rtt_variance[connection_key]
+            self.rtt_variance[connection_key] = alpha * old_variance + (1 - alpha) * deviation
+            
+            # Logging para debug de delays e jitter
+            print(f"[RTT] Amostra RTT para {connection_key[0]}:{connection_key[1]} = {rtt_sample:.3f}s | "
+                  f"RTT estimado = {self.rtt_estimated[connection_key]:.3f}s | "
+                  f"Variância (jitter) = {self.rtt_variance[connection_key]:.3f}s")
+    
+    def _get_adaptive_timeout(self, connection_key):
+        """
+        Calcula timeout adaptativo baseado em RTT estimado e variância (jitter).
+        
+        Fórmula: timeout = RTT_estimated + 4 * RTT_variance
+        Similar ao TCP, mas adaptado para UDP com packet loss.
+        
+        Args:
+            connection_key (tuple): (ip, port) identificando a conexão
+            
+        Returns:
+            float: Timeout em segundos (mínimo 1.0s, máximo 10.0s)
+        """
+        if connection_key not in self.rtt_estimated:
+            # Se não há estimativa, usar timeout padrão
+            timeout = float(self.limit.timeout)
+            print(f"[DELAY] Timeout adaptativo para {connection_key[0]}:{connection_key[1]} = {timeout:.3f}s (padrão - sem histórico RTT)")
+            return timeout
+        
+        rtt_est = self.rtt_estimated[connection_key]
+        rtt_var = self.rtt_variance[connection_key]
+        
+        # Timeout = RTT estimado + 4 * variância (similar ao TCP)
+        # Adicionar margem extra para packet loss em UDP
+        timeout = rtt_est + 4 * rtt_var + 0.5  # +0.5s margem extra para UDP
+        
+        # Limitar entre mínimo e máximo razoáveis
+        timeout = max(1.0, min(10.0, timeout))
+        
+        print(f"[DELAY] Timeout adaptativo para {connection_key[0]}:{connection_key[1]} = {timeout:.3f}s "
+              f"(RTT={rtt_est:.3f}s, variância={rtt_var:.3f}s, fórmula: RTT + 4*var + 0.5s)")
+        
+        return timeout
+    
+    def _add_to_reorder_buffer(self, connection_key, seq, chunk_data):
+        """
+        Adiciona chunk ao buffer de reordenação para tratamento de jitter.
+        
+        Args:
+            connection_key (tuple): (ip, port) identificando a conexão
+            seq (int): Número de sequência do chunk
+            chunk_data (tuple): (chunk_bytes, timestamp) - dados do chunk e timestamp de receção
+        """
+        if connection_key not in self.reorder_buffer:
+            self.reorder_buffer[connection_key] = {}
+        
+        buffer = self.reorder_buffer[connection_key]
+        
+        # Limitar tamanho do buffer
+        if len(buffer) >= self.max_reorder_buffer_size:
+            # Remover chunk mais antigo se buffer está cheio
+            oldest_seq = min(buffer.keys())
+            del buffer[oldest_seq]
+            print(f"[JITTER] Buffer de reordenação cheio para {connection_key[0]}:{connection_key[1]} - removido seq={oldest_seq}")
+        
+        buffer[seq] = chunk_data
+        print(f"[JITTER] Chunk seq={seq} adicionado ao buffer de reordenação para {connection_key[0]}:{connection_key[1]} "
+              f"(tamanho buffer: {len(buffer)}/{self.max_reorder_buffer_size})")
+    
+    def _get_from_reorder_buffer(self, connection_key, expected_seq):
+        """
+        Verifica se o chunk esperado está no buffer de reordenação.
+        
+        Args:
+            connection_key (tuple): (ip, port) identificando a conexão
+            expected_seq (int): Número de sequência esperado
+            
+        Returns:
+            tuple or None: (chunk_bytes, timestamp) se encontrado, None caso contrário
+        """
+        if connection_key not in self.reorder_buffer:
+            return None
+        
+        buffer = self.reorder_buffer[connection_key]
+        if expected_seq in buffer:
+            chunk_data = buffer.pop(expected_seq)
+            print(f"[JITTER] Chunk seq={expected_seq} recuperado do buffer de reordenação para {connection_key[0]}:{connection_key[1]} "
+                  f"(restam {len(buffer)} chunks no buffer)")
+            return chunk_data
+        
+        return None
+    
+    def _cleanup_reorder_buffer(self, connection_key, current_seq):
+        """
+        Remove chunks antigos do buffer de reordenação que já não são necessários.
+        Também remove chunks que esperaram muito tempo (timeout de reordenação).
+        
+        Args:
+            connection_key (tuple): (ip, port) identificando a conexão
+            current_seq (int): Número de sequência atual (chunks com seq < current_seq podem ser removidos)
+        """
+        if connection_key not in self.reorder_buffer:
+            return
+        
+        buffer = self.reorder_buffer[connection_key]
+        current_time = time.time()
+        
+        # Remover chunks muito antigos ou já processados
+        to_remove = []
+        for seq, (chunk_data, timestamp) in buffer.items():
+            age = current_time - timestamp
+            # Remover se já foi processado (seq < current_seq) ou se timeout de reordenação expirou
+            if seq < current_seq:
+                to_remove.append(seq)
+                print(f"[JITTER] Removendo chunk seq={seq} do buffer (já processado, current_seq={current_seq})")
+            elif age > self.max_reorder_wait_time:
+                to_remove.append(seq)
+                print(f"[JITTER] Removendo chunk seq={seq} do buffer (timeout: {age:.2f}s > {self.max_reorder_wait_time}s)")
+        
+        for seq in to_remove:
+            del buffer[seq]
+        
+        if to_remove:
+            print(f"[JITTER] Buffer limpo para {connection_key[0]}:{connection_key[1]} - removidos {len(to_remove)}, restam {len(buffer)}")
     
     def server(self):
         """
@@ -626,12 +795,28 @@ class MissionLink:
             if isinstance(chunks,str):
                 print(f"[DEBUG] send: Mensagem cabe num único pacote ({len(chunks)} bytes)")
                 print(f"[DEBUG] send: Enviando mensagem completa (seq={seq})")
+                
+                connection_key = (ip, port)
+                send_timestamp = time.time()
                 self.sock.sendto(self.formatMessage(missionType,self.datakey,idMission,seq,ack,chunks),(ip,port))
+                
+                # Usar timeout adaptativo
+                adaptive_timeout = self._get_adaptive_timeout(connection_key)
+                original_timeout = self.sock.gettimeout()
+                self.sock.settimeout(adaptive_timeout)
+                
                 while True: 
                     try:
                         # Usar lock para evitar que acceptConnection() consuma o ACK
                         with self.sock_lock:
                             text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
+                        
+                        # Calcular RTT
+                        rtt_sample = time.time() - send_timestamp
+                        self._update_rtt(connection_key, rtt_sample)
+                        # Restaurar timeout original
+                        self.sock.settimeout(original_timeout)
+                        
                         lista = text.decode().split("|")
                         # Bug fix: Validar formato da mensagem antes de aceder a índices
                         if len(lista) < 7:
@@ -728,9 +913,12 @@ class MissionLink:
                                     continue
                         continue
                     except socket.timeout:
+                        # Restaurar timeout original antes de continuar
+                        self.sock.settimeout(original_timeout)
                         # Timeout ao aguardar ACK - retransmitir mensagem
-                        print(f"[PACKET LOSS] Timeout ao aguardar ACK da mensagem de {ip}:{port}")
+                        print(f"[PACKET LOSS] Timeout ao aguardar ACK da mensagem de {ip}:{port} (timeout adaptativo: {adaptive_timeout:.3f}s)")
                         print(f"[RETRANSMISSÃO] Reenviando mensagem para {ip}:{port}")
+                        send_timestamp = time.time()
                         self.sock.sendto(self.formatMessage(missionType,self.datakey,idMission,seq,ack,chunks),(ip,port))
                         continue
                     except Exception as e:
@@ -743,11 +931,32 @@ class MissionLink:
             # we must send each element of the list
             print(f"[DEBUG] send: Mensagem dividida em {len(chunks)} chunks")
             i = 0
+            connection_key = (ip, port)
+            
+            # Usar timeout adaptativo para esta conexão
+            adaptive_timeout = self._get_adaptive_timeout(connection_key)
+            
             while i != len(chunks):
                 print(f"[DEBUG] send: Enviando chunk {i+1}/{len(chunks)} (seq={seq}, tamanho={len(chunks[i])} bytes)")
+                
+                # Medir RTT: guardar timestamp antes de enviar
+                send_timestamp = time.time()
                 self.sock.sendto(self.formatMessage(missionType,self.datakey,idMission,seq,ack,chunks[i]),(ip,port))
+                
+                # Usar timeout adaptativo baseado em RTT estimado
+                adaptive_timeout = self._get_adaptive_timeout(connection_key)
+                original_timeout = self.sock.gettimeout()
+                self.sock.settimeout(adaptive_timeout)
+                
                 try:
                     response,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
+                    # Restaurar timeout original
+                    self.sock.settimeout(original_timeout)
+                    
+                    # Calcular RTT: tempo entre envio e receção do ACK
+                    rtt_sample = time.time() - send_timestamp
+                    self._update_rtt(connection_key, rtt_sample)
+                    
                     lista = response.decode().split("|")
                     if(
                         len(lista) == 7 and
@@ -759,15 +968,19 @@ class MissionLink:
                     ):
                         seq += 1
                         ack = seq
-                        print(f"[DEBUG] send: Chunk {i+1}/{len(chunks)} confirmado (ACK recebido, seq={seq})")
+                        print(f"[DEBUG] send: Chunk {i+1}/{len(chunks)} confirmado (ACK recebido, seq={seq}, RTT={rtt_sample:.3f}s)")
                         i += 1
                         continue
                     else:
                         print(f"[DEBUG] send: ACK inválido recebido - IP={responseIp} (esperado {ip}), Port={responsePort} (esperado {port}), ack={lista[ackPos] if len(lista) > ackPos else 'N/A'} (esperado {seq}), flag={lista[flagPos] if len(lista) > flagPos else 'N/A'}")
                 except socket.timeout:
+                    # Restaurar timeout original antes de continuar
+                    self.sock.settimeout(original_timeout)
                     # Timeout ao aguardar ACK - retransmitir chunk
-                    print(f"[PACKET LOSS] Timeout ao aguardar ACK do chunk {i+1}/{len(chunks)} de {ip}:{port}")
+                    print(f"[PACKET LOSS] Timeout ao aguardar ACK do chunk {i+1}/{len(chunks)} de {ip}:{port} (timeout adaptativo: {adaptive_timeout:.3f}s)")
                     print(f"[RETRANSMISSÃO] Reenviando chunk {i+1}/{len(chunks)} para {ip}:{port}")
+                    # Reenviar chunk
+                    send_timestamp = time.time()
                     self.sock.sendto(self.formatMessage(missionType,self.datakey,idMission,seq,ack,chunks[i]),(ip,port))
                     continue
                 except Exception as e:
@@ -935,10 +1148,57 @@ class MissionLink:
             # Catch packets until the fin packet arrives
             print(f"[DEBUG] recv: Aguardando chunks adicionais ou FIN...")
             chunk_count = 0
+            connection_key = (ipDest, portDest)
+            
+            # Inicializar timeout adaptativo para esta conexão
+            adaptive_timeout = self._get_adaptive_timeout(connection_key)
+            last_packet_time = time.time()
+            
             while True:
-                # Try to receive a packet until timeout
                 try:
-                    chunks, (ip,port) = self.sock.recvfrom(self.limit.buffersize)
+                    # Limpar buffer de reordenação periodicamente
+                    self._cleanup_reorder_buffer(connection_key, seq + 1)
+                    
+                    # Verificar primeiro se há chunk esperado no buffer de reordenação (tratamento de jitter)
+                    expected_seq = seq + 1
+                    buffered_chunk = self._get_from_reorder_buffer(connection_key, expected_seq)
+                    if buffered_chunk is not None:
+                        chunks, timestamp = buffered_chunk
+                        # Calcular RTT se possível (diferença entre receção e timestamp)
+                        if timestamp > 0:
+                            rtt_sample = time.time() - timestamp
+                            self._update_rtt(connection_key, rtt_sample)
+                        print(f"[DEBUG] recv: Chunk {expected_seq} recuperado do buffer de reordenação (jitter tratado)")
+                        ip, port = ipDest, portDest  # Usar IP/porta da conexão
+                    else:
+                        # Não há no buffer - receber do socket
+                        # Usar timeout adaptativo baseado em RTT estimado
+                        adaptive_timeout = self._get_adaptive_timeout(connection_key)
+                        original_timeout = self.sock.gettimeout()
+                        self.sock.settimeout(adaptive_timeout)
+                        
+                        try:
+                            chunks, (ip,port) = self.sock.recvfrom(self.limit.buffersize)
+                            # Restaurar timeout original
+                            self.sock.settimeout(original_timeout)
+                            
+                            # Calcular RTT se possível
+                            current_time = time.time()
+                            if last_packet_time > 0:
+                                rtt_sample = current_time - last_packet_time
+                                self._update_rtt(connection_key, rtt_sample)
+                            last_packet_time = current_time
+                            
+                        except socket.timeout:
+                            # Restaurar timeout original antes de continuar
+                            self.sock.settimeout(original_timeout)
+                            # Timeout - continuar para tratamento abaixo
+                            raise
+                        finally:
+                            # Garantir que timeout é restaurado mesmo em caso de erro
+                            if self.sock.gettimeout() != original_timeout:
+                                self.sock.settimeout(original_timeout)
+                    
                     chunk_count += 1
                     print(f"[DEBUG] recv: Chunk {chunk_count} recebido de {ip}:{port}, tamanho={len(chunks)} bytes")
                     lista = chunks.decode().split("|")
@@ -1056,9 +1316,52 @@ class MissionLink:
                         #          Todos os outros ACKs no código usam None corretamente
                         print(f"[DEBUG] recv: Enviando ACK do chunk (seq={seq})")
                         self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
-                    
-
-
+                    else:
+                        # Chunk recebido não corresponde ao esperado
+                        # Pode ser: chunk duplicado (seq < seq esperado), chunk futuro (seq > seq esperado), ou formato inválido
+                        # Bug fix: Se for chunk duplicado (já processado), enviar ACK para parar retransmissões
+                        #          Se for chunk futuro, ignorar (aguardar chunk correto)
+                        #          Se formato inválido, ignorar
+                        if (
+                            len(lista) == 7 and
+                            (idMission is None or lista[idMissionPos] == idMission) and
+                            ipDest == ip and
+                            port == portDest
+                        ):
+                            # Formato válido e IP/porta corretos - verificar se é chunk duplicado
+                            try:
+                                received_seq = int(lista[seqPos])
+                                expected_seq = seq + 1
+                                if received_seq < expected_seq:
+                                    # Chunk duplicado - já foi processado, enviar ACK para parar retransmissões
+                                    print(f"[DUPLICAÇÃO] Chunk duplicado recebido (seq={received_seq}, esperado={expected_seq}) - enviando ACK para parar retransmissões")
+                                    # Enviar ACK confirmando que já recebemos esse chunk
+                                    # O ACK deve ter o seq atual (não incrementado) e ack = received_seq + 1 (próximo seq esperado)
+                                    duplicate_ack_seq = seq  # Nosso seq atual
+                                    duplicate_ack = received_seq + 1  # Próximo seq que esperamos após esse chunk
+                                    self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,duplicate_ack_seq,duplicate_ack,self.eofkey),(ip,port))
+                                elif received_seq > expected_seq:
+                                    # Chunk futuro - ainda não chegou o chunk esperado
+                                    # Adicionar ao buffer de reordenação para tratamento de jitter
+                                    print(f"[DEBUG] recv: Chunk futuro recebido (seq={received_seq}, esperado={expected_seq}) - adicionando ao buffer de reordenação (jitter)")
+                                    chunk_timestamp = time.time()
+                                    self._add_to_reorder_buffer(connection_key, received_seq, (chunks, chunk_timestamp))
+                                    # Continuar loop para aguardar chunk correto
+                                    continue
+                                else:
+                                    # Seq igual ao esperado mas validação falhou por outro motivo (idMission, etc)
+                                    print(f"[DEBUG] recv: Chunk com seq correto mas validação falhou - ignorando")
+                            except (ValueError, IndexError):
+                                # Erro ao parsear seq - formato inválido, ignorar
+                                print(f"[DEBUG] recv: Erro ao parsear seq do chunk - formato inválido, ignorando")
+                        else:
+                            # Formato inválido ou IP/porta incorretos - ignorar
+                            if len(lista) != 7:
+                                print(f"[DEBUG] recv: Chunk com formato inválido (apenas {len(lista)} campos, esperado 7) - ignorando")
+                            elif ipDest != ip or port != portDest:
+                                print(f"[DEBUG] recv: Chunk de origem incorreta ({ip}:{port}, esperado {ipDest}:{portDest}) - ignorando")
+                            else:
+                                print(f"[DEBUG] recv: Chunk rejeitado por validação - ignorando")
 
                 # In case of a timeout, it means the
                 # either the message did not reach the destination
@@ -1066,8 +1369,9 @@ class MissionLink:
                 # So, to make sure, we sent the previous message that was supposed to be sent
                 except socket.timeout:
                     # Reenviar último ACK para solicitar retransmissão
-                    print(f"[PACKET LOSS] Timeout ao aguardar próximo chunk de {ip}:{port} (chunk {chunk_count+1})")
-                    print(f"[DEBUG] recv: Timeout - último seq recebido={seq}, último ack enviado={ack}")
+                    adaptive_timeout_used = self._get_adaptive_timeout(connection_key) if 'connection_key' in locals() else self.limit.timeout
+                    print(f"[PACKET LOSS] Timeout ao aguardar próximo chunk de {ip}:{port} (chunk {chunk_count+1}, timeout usado: {adaptive_timeout_used:.3f}s)")
+                    print(f"[DEBUG] recv: Timeout - último seq recebido={seq}, último ack enviado={ack}, esperado seq={seq+1}")
                     print(f"[RETRANSMISSÃO] Reenviando último ACK para solicitar retransmissão para {ip}:{port}")
                     self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                     continue
