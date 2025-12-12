@@ -1183,7 +1183,10 @@ class MissionLink:
 
         # We get the first message with data to know if it is a message or a file 
         firstMessage = None
+        firstMessageFlag = None  # Guardar flag da primeira mensagem para verificar se já contém FIN
         print(f"[DEBUG] recv: Aguardando primeira mensagem...")
+        start_first_message = time.time()
+        max_first_message_wait = 30  # Timeout máximo de 30s para aguardar primeira mensagem
         while firstMessage == None:
             try:
                 # Usar lock para evitar race conditions com send()
@@ -1245,9 +1248,15 @@ class MissionLink:
                     print(f"[DEBUG] recv: Validação falhou - IP/porta/seq não correspondem, ignorando mensagem")
                     firstMessage = None
             except socket.timeout:
+                elapsed = time.time() - start_first_message
+                if elapsed >= max_first_message_wait:
+                    raise TimeoutError(f"MissionLink: timeout ao aguardar primeira mensagem após {max_first_message_wait}s")
                 firstMessage = None
                 continue
             except Exception as e:
+                elapsed = time.time() - start_first_message
+                if elapsed >= max_first_message_wait:
+                    raise TimeoutError(f"MissionLink: timeout ao aguardar primeira mensagem após {max_first_message_wait}s ({e})")
                 print(f"Erro ao receber primeira mensagem: {e}")
                 firstMessage = None
                 continue
@@ -1269,6 +1278,75 @@ class MissionLink:
                 prevMessage = None  # Reset para usar estratégia de escrita atrasada
             else:
                 message = ""
+            
+            # Bug fix: Se a primeira mensagem já contém FIN, processar imediatamente sem entrar no loop
+            #          Isto evita que o código fique preso aguardando FIN que já foi recebido
+            if firstMessageFlag == self.finkey:
+                print(f"[DEBUG] recv: Primeira mensagem já contém FIN - mensagem completa tem {len(message)} bytes")
+                # Handshake de 4 vias correto:
+                # 1. Servidor envia FIN -> rover recebe
+                # 2. Rover envia ACK do FIN recebido
+                # 3. Rover envia seu próprio FIN
+                # 4. Servidor envia ACK do FIN do rover
+                
+                # Passo 2: Enviar ACK do FIN recebido primeiro
+                fin_ack_seq = seq  # ACK do nosso lado
+                fin_ack = ack  # Reconhecer o seq do FIN recebido (ack já foi atualizado na linha 1226)
+                print(f"[DEBUG] recv: Enviando ACK do FIN recebido (seq={fin_ack_seq}, ack={fin_ack})")
+                self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,fin_ack_seq,fin_ack,self.eofkey),(ipDest,portDest))
+                
+                # Passo 3: Enviar nosso próprio FIN
+                # Incrementar seq para o FIN (ack permanece o mesmo - reconhece o FIN recebido)
+                seq += 1
+                print(f"[DEBUG] recv: Enviando nosso próprio FIN (seq={seq}, ack={ack})")
+                self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ipDest,portDest))
+                
+                # Passo 4: Aguardar ACK do nosso FIN
+                print(f"[DEBUG] recv: Aguardando ACK do nosso FIN enviado")
+                fin_ack_retries = 0
+                max_fin_ack_retries = 5  # Limite máximo antes de desistir
+                original_timeout = self.sock.gettimeout()
+                adaptive_timeout = self._get_adaptive_timeout((ipDest, portDest))
+                self.sock.settimeout(adaptive_timeout)
+                
+                while fin_ack_retries < max_fin_ack_retries:
+                    try:
+                        with self.sock_lock:
+                            ack_response, (response_ip, response_port) = self.sock.recvfrom(self.limit.buffersize)
+                        ack_lista = ack_response.decode().split("|")
+                        if (len(ack_lista) >= 7 and
+                            response_ip == ipDest and
+                            response_port == portDest and
+                            ack_lista[ackPos] == str(seq) and
+                            ack_lista[flagPos] == self.ackkey and
+                            (idMission is None or ack_lista[idMissionPos] == idMission)):
+                            print(f"[DEBUG] recv: ACK do nosso FIN recebido, conexão fechada. Retornando mensagem completa (tamanho: {len(message)} bytes)")
+                            self.sock.settimeout(original_timeout)
+                            return [idAgent, idMission, missionType, message, ipDest, portDest]
+                        else:
+                            # Mensagem não é o ACK esperado - ignorar e continuar aguardando
+                            continue
+                    except socket.timeout:
+                        fin_ack_retries += 1
+                        if fin_ack_retries < max_fin_ack_retries:
+                            # Retransmitir FIN
+                            print(f"[RETRANSMISSÃO] Reenviando FIN para {ipDest}:{portDest} (tentativa {fin_ack_retries}/{max_fin_ack_retries})")
+                            self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ipDest,portDest))
+                            adaptive_timeout = self._get_adaptive_timeout((ipDest, portDest))
+                            self.sock.settimeout(adaptive_timeout)
+                        else:
+                            print(f"[AVISO] Não recebeu ACK do FIN após {max_fin_ack_retries} tentativas, mas já enviou ACK do FIN recebido - conexão fechada")
+                            self.sock.settimeout(original_timeout)
+                            return [idAgent, idMission, missionType, message, ipDest, portDest]
+                    except Exception as e:
+                        print(f"[ERRO] Erro ao aguardar ACK do FIN: {e}")
+                        fin_ack_retries += 1
+                        if fin_ack_retries >= max_fin_ack_retries:
+                            self.sock.settimeout(original_timeout)
+                            return [idAgent, idMission, missionType, message, ipDest, portDest]
+                
+                self.sock.settimeout(original_timeout)
+                return [idAgent, idMission, missionType, message, ipDest, portDest]
             
             # Catch packets until the fin packet arrives
             print(f"[DEBUG] recv: Aguardando chunks adicionais ou FIN...")

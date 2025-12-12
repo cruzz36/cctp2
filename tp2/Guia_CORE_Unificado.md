@@ -275,6 +275,67 @@ PY
   `python3 start_ground_control.py`  
   (só dashboard: `python3 GroundControl.py --dashboard --api http://10.0.1.10:8082`)
 
+### 4.5) Logs Guardados Automaticamente
+
+**LOCALIZAÇÃO DOS LOGS:**
+- Todos os scripts `start_*.py` guardam automaticamente logs em ficheiros
+- Diretório: `/tmp/nms/logs/` (criado automaticamente em cada nó)
+- Formato dos nomes: `{tipo}_{timestamp}.log`
+  - Rover: `rover_{rover_id}_{YYYYMMDD_HHMMSS}.log` (ex: `rover_r1_20250115_143022.log`)
+  - Nave-Mãe: `navemae_{YYYYMMDD_HHMMSS}.log` (ex: `navemae_20250115_143022.log`)
+  - Ground Control: `ground_control_{YYYYMMDD_HHMMSS}.log` (ex: `ground_control_20250115_143022.log`)
+
+**FUNCIONALIDADE:**
+- Os logs são guardados automaticamente quando executas qualquer script `start_*.py`
+- O output continua a aparecer no terminal (não é redirecionado, apenas duplicado)
+- Todos os prints, erros e debug são guardados no ficheiro
+- Cada execução cria um novo ficheiro com timestamp único
+
+**COMO VER OS LOGS:**
+
+1. **Durante execução:**
+   - Quando executas um script, verás uma mensagem: `[INFO] Logs sendo guardados em: /tmp/nms/logs/...`
+   - O caminho completo é mostrado no início da execução
+
+2. **Ver logs guardados:**
+   ```bash
+   # Listar todos os logs
+   ls -lt /tmp/nms/logs/
+   
+   # Ver último log do rover r1
+   ls -t /tmp/nms/logs/rover_r1_*.log | head -1 | xargs cat
+   
+   # Ver último log da Nave-Mãe
+   ls -t /tmp/nms/logs/navemae_*.log | head -1 | xargs cat
+   
+   # Ver logs em tempo real (se script ainda está a correr)
+   tail -f /tmp/nms/logs/rover_r1_*.log
+   ```
+
+3. **Copiar logs do CORE para o host:**
+   - **Método 1 (File Transfer no CORE):**
+     - No CORE: File → Copy files from node
+     - Selecionar o nó (ex: Rover1)
+     - Copiar `/tmp/nms/logs/` ou ficheiros específicos
+   
+   - **Método 2 (via vcmd no host CORE):**
+     ```bash
+     SESSION=$(ls -d /tmp/pycore.* | head -1)
+     # Copiar logs do Rover1
+     sudo vcmd -c $SESSION/Rover1 -- tar -czf /tmp/logs_rover1.tgz -C /tmp/nms logs
+     sudo cp $SESSION/Rover1/tmp/logs_rover1.tgz ~/logs_rover1.tgz
+     # Depois extrair no host: tar -xzf ~/logs_rover1.tgz
+     ```
+
+**VANTAGENS:**
+- Não precisas de copiar manualmente do terminal
+- Logs completos mesmo se fechares o terminal
+- Timestamp único evita sobreposição
+- Útil para debug e análise posterior
+- Podes copiar os ficheiros facilmente do CORE
+
+**NOTA:** Se não conseguires criar o diretório `/tmp/nms/logs/`, os scripts continuam a funcionar normalmente, apenas não guardam logs em ficheiro (mas continuam a mostrar no terminal).
+
 ### 5) Testar
 - Em qualquer nó: `cd /tmp/nms && python3 test_core_automated.py auto`
 - Em qualquer nó: `cd /tmp/nms && chmod +x test_core_integration.sh && ./test_core_integration.sh`
