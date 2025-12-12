@@ -196,12 +196,27 @@ class ObservationAPI:
             missions = []
             
             # Missões em self.tasks (podem estar ativas ou na fila)
+            # Lista de missões concluídas para remover de tasks
+            completed_missions_to_remove = []
+            
             for mission_id, mission_data in self.nms_server.tasks.items():
                 mission_info = self._format_mission(mission_id, mission_data)
+                
+                # Verificar adicionalmente se a missão está realmente concluída
+                # Se o status já foi marcado como "completed" em _format_mission, remover de tasks
+                if mission_info["status"] == "completed":
+                    completed_missions_to_remove.append(mission_id)
+                
                 # Só mostrar como "active" se realmente estiver em execução
                 # Missões na fila aparecem como "pending"
+                # Se filtro é "active", excluir missões concluídas
                 if status_filter is None or mission_info["status"] == status_filter:
                     missions.append(mission_info)
+            
+            # Remover missões concluídas de tasks para não aparecerem mais como ativas
+            for mission_id in completed_missions_to_remove:
+                if mission_id in self.nms_server.tasks:
+                    del self.nms_server.tasks[mission_id]
             
             # Missões pendentes
             for mission_data in self.nms_server.pendingMissions:
@@ -384,6 +399,8 @@ class ObservationAPI:
         
         # Verificar primeiro se está concluída
         status = "active"  # Default
+        
+        # Verificar se há progresso marcado como "completed"
         if mission_id in self.nms_server.missionProgress:
             progress = self.nms_server.missionProgress[mission_id]
             if isinstance(progress, dict):
@@ -397,6 +414,57 @@ class ObservationAPI:
                             # Esta missão está realmente em execução
                             status = "active"
                             break
+        
+        # Se não tem progresso marcado como "completed" ou "in_progress",
+        # verificar telemetria e outras missões para determinar se está concluída
+        if status == "active":
+            latest_telemetry = self._get_latest_telemetry(rover_id)
+            if latest_telemetry:
+                operational_status = latest_telemetry.get("operational_status", "")
+                # Se o rover está "parado" e não há progresso ativo, a missão foi concluída
+                if operational_status == "parado":
+                    # Verificar se realmente não há progresso ativo
+                    has_active_progress = False
+                    if mission_id in self.nms_server.missionProgress:
+                        progress = self.nms_server.missionProgress[mission_id]
+                        if isinstance(progress, dict) and rover_id in progress:
+                            rover_progress = progress[rover_id]
+                            if isinstance(rover_progress, dict):
+                                progress_status = rover_progress.get("status", "")
+                                if progress_status == "in_progress":
+                                    has_active_progress = True
+                    
+                    if not has_active_progress:
+                        # Missão concluída - marcar como completed
+                        status = "completed"
+                # Se o rover está "em missão" ou "a caminho", verificar se há outra missão mais recente
+                elif operational_status in ["em missão", "a caminho"]:
+                    # Verificar se há outra missão mais recente para este rover que está realmente em execução
+                    for other_id, other_data in self.nms_server.tasks.items():
+                        if other_id != mission_id:
+                            if isinstance(other_data, str):
+                                try:
+                                    other_data = json.loads(other_data)
+                                except:
+                                    continue
+                            if other_data.get("rover_id") == rover_id:
+                                # Se há outra missão mais recente (ordem alfabética), esta pode estar concluída
+                                if other_id > mission_id:
+                                    # Verificar se a outra missão tem progresso ativo
+                                    other_has_progress = False
+                                    if other_id in self.nms_server.missionProgress:
+                                        other_progress = self.nms_server.missionProgress[other_id]
+                                        if isinstance(other_progress, dict) and rover_id in other_progress:
+                                            other_rover_progress = other_progress[rover_id]
+                                            if isinstance(other_rover_progress, dict):
+                                                other_status = other_rover_progress.get("status", "")
+                                                if other_status == "in_progress":
+                                                    other_has_progress = True
+                                    
+                                    # Se a outra missão mais recente está ativa, esta missão antiga está concluída
+                                    if other_has_progress or other_id not in self.nms_server.missionProgress:
+                                        status = "completed"
+                                        break
         
         # Se não tem progresso "in_progress" e há outra missão do mesmo rover com progresso,
         # esta missão está na fila (pending)
@@ -451,17 +519,10 @@ class ObservationAPI:
         Returns:
             str or None: ID da missão atual ou None se não houver
         """
-        # Verificar telemetria mais recente para confirmar se está em missão
-        latest_telemetry = self._get_latest_telemetry(rover_id)
-        operational_status = None
-        if latest_telemetry:
-            operational_status = latest_telemetry.get("operational_status", "")
-        
-        # Se não está "em missão" na telemetria, não há missão ativa
-        if operational_status != "em missão":
-            return None
-        
         # Procurar missão ativa em tasks para este rover
+        # Coletar todas as missões válidas primeiro e ordenar por mission_id (mais recente primeiro)
+        valid_missions = []
+        
         for mission_id, mission_data in self.nms_server.tasks.items():
             if isinstance(mission_data, str):
                 try:
@@ -471,7 +532,7 @@ class ObservationAPI:
             
             if mission_data.get("rover_id") == rover_id:
                 # Verificar se a missão não está concluída
-                # Se está em tasks e não está concluída em missionProgress, está ativa
+                is_completed = False
                 if mission_id in self.nms_server.missionProgress:
                     progress = self.nms_server.missionProgress[mission_id]
                     if isinstance(progress, dict) and rover_id in progress:
@@ -479,10 +540,27 @@ class ObservationAPI:
                         if isinstance(rover_progress, dict):
                             status = rover_progress.get("status", "")
                             if status == "completed":
-                                continue  # Missão concluída, procurar próxima
+                                is_completed = True
                 
-                # Missão encontrada e ativa
-                return mission_id
+                # Se não está concluída, adicionar à lista de candidatas
+                if not is_completed:
+                    valid_missions.append((mission_id, mission_data))
+        
+        # Ordenar por mission_id (ordem decrescente para pegar a mais recente)
+        valid_missions.sort(key=lambda x: x[0], reverse=True)
+        
+        # Verificar telemetria para confirmar qual missão está realmente em execução
+        latest_telemetry = self._get_latest_telemetry(rover_id)
+        if latest_telemetry:
+            operational_status = latest_telemetry.get("operational_status", "")
+            # Se está "em missão" ou "a caminho", retornar a missão mais recente
+            if operational_status in ["em missão", "a caminho"]:
+                if valid_missions:
+                    return valid_missions[0][0]  # Retornar a missão mais recente
+        else:
+            # Se não há telemetria mas há missões válidas, retornar a mais recente
+            if valid_missions:
+                return valid_missions[0][0]
         
         return None
     
@@ -550,8 +628,8 @@ class ObservationAPI:
         Returns:
             list: Lista de dados de telemetria
         """
-        # Limpar ficheiros antigos periodicamente (manter apenas os 50 mais recentes por rover)
-        self._cleanup_old_telemetry_files(max_files_per_rover=50)
+        # Limpar ficheiros antigos periodicamente (manter até 600 ficheiros por rover)
+        self._cleanup_old_telemetry_files(max_files_per_rover=600)
         
         telemetry_folder = self.nms_server.telemetryStream.storefolder
         telemetry_data = []
@@ -726,7 +804,7 @@ class ObservationAPI:
         # Retornar apenas os N mais recentes
         return telemetry_data[:limit]
     
-    def _cleanup_old_telemetry_files(self, max_files_per_rover=50):
+    def _cleanup_old_telemetry_files(self, max_files_per_rover=600):
         """
         Remove ficheiros de telemetria antigos, mantendo apenas os N mais recentes por rover.
         Evita acumulação excessiva de ficheiros.

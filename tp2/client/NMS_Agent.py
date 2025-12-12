@@ -5,6 +5,7 @@ import time
 import json
 import threading
 import math
+import random
 
 def validateMission(mission_data):
     """
@@ -173,6 +174,35 @@ def removeNulls(text):
             break
     return text
 
+def degreesToCardinalDirection(degrees):
+    """
+    Converte graus (0-360) em pontos cardeais (Norte, Sul, Este, Oeste).
+    
+    Conversão:
+    - Norte: 315-45° (ou seja, -45° a 45°)
+    - Este: 45-135°
+    - Sul: 135-225°
+    - Oeste: 225-315°
+    
+    Args:
+        degrees (float): Direção em graus (0-360, onde 0 = Norte)
+        
+    Returns:
+        str: Ponto cardeal ("Norte", "Sul", "Este", "Oeste")
+    """
+    # Normalizar para 0-360
+    degrees = float(degrees) % 360.0
+    
+    # Converter para pontos cardeais
+    if degrees >= 315 or degrees < 45:
+        return "Norte"
+    elif degrees >= 45 and degrees < 135:
+        return "Este"
+    elif degrees >= 135 and degrees < 225:
+        return "Sul"
+    else:  # 225 <= degrees < 315
+        return "Oeste"
+
 class NMS_Agent:
     """
     Classe que representa um agente/rover no sistema.
@@ -207,7 +237,7 @@ class NMS_Agent:
         # Estado de monitorização contínua
         self.telemetry_thread = None  # Thread para monitorização contínua
         self.telemetry_running = False  # Flag para controlar loop
-        self.telemetry_interval = 30  # Intervalo padrão em segundos (conforme requisitos: telemetria contínua)
+        self.telemetry_interval = 5  # Intervalo padrão em segundos (telemetria a cada 5 segundos)
         self.current_mission = None  # Missão atualmente em execução
         self.mission_queue = []  # Fila de missões pendentes (rover executa uma de cada vez)
         self.mission_executing = False  # Flag para indicar se há missão em execução
@@ -283,53 +313,43 @@ class NMS_Agent:
         Solicita uma missão à Nave-Mãe através do MissionLink.
         Implementa o requisito: "O rover deve ser capaz de solicitar uma missão à Nave-Mãe."
         
+        A Nave-Mãe responderá enviando a missão através do MissionLink, que será recebida
+        pelo recvMissionLink() que está a correr numa thread separada.
+        
         Args:
             ip (str): Endereço IP da Nave-Mãe
             
         Returns:
-            dict or None: Dicionário com dados da missão recebida, ou None se não houver missão disponível
+            bool: True se o pedido foi enviado com sucesso, False caso contrário
         """
-        # Enviar solicitação de missão
-        self.missionLink.send(ip, self.missionLink.port, self.missionLink.requestMission, self.id, "000", "request")
+        # Delay maior para garantir que a Nave-Mãe está pronta e evitar conflitos
+        time.sleep(1.0)
         
-        # Aguardar resposta (pode ser missão ou mensagem de "sem missão disponível")
-        try:
-            response = self.missionLink.recv()
-            if response[2] == self.missionLink.taskRequest:
-                mission_message = response[3]
-                mission_id = response[1]
-                
-                # Validar formato da missão
-                is_valid, error_msg = validateMission(mission_message)
-                
-                if not is_valid:
-                    self.missionLink.send(response[4], self.missionLink.port, None, self.id, mission_id, "invalid")
-                    return None
-                
-                # Parse do JSON da missão
-                try:
-                    if isinstance(mission_message, str):
-                        mission_data = json.loads(mission_message)
-                    else:
-                        mission_data = mission_message
-                except json.JSONDecodeError:
-                    self.missionLink.send(response[4], self.missionLink.port, None, self.id, mission_id, "parse_error")
-                    return None
-                
-                # Armazenar missão validada
-                self.tasks[mission_id] = mission_data
-                
-                # Enviar ACK de confirmação
-                self.missionLink.send(response[4], self.missionLink.port, None, self.id, mission_id, mission_id)
-                
-                return mission_data
-            elif response[2] == self.missionLink.noneType:
-                if response[3] == "no_mission":
-                    print(f"[INFO] requestMission: Nave-Mãe respondeu: sem missão disponível no momento")
-                return None
-        except Exception as e:
-            print(f"[ERRO] requestMission: Erro ao solicitar missão: {e}")
-            return None
+        # Enviar solicitação de missão com retry
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Enviar apenas o pedido - a resposta virá através do recvMissionLink()
+                self.missionLink.send(ip, self.missionLink.port, self.missionLink.requestMission, self.id, "000", "request")
+                return True
+            except TimeoutError as e:
+                if attempt < max_retries - 1:
+                    print(f"[INFO] Tentativa {attempt + 1}/{max_retries} falhou, a tentar novamente...")
+                    time.sleep(2)  # Delay maior entre tentativas
+                    continue
+                else:
+                    print(f"[ERRO] requestMission: Timeout após {max_retries} tentativas: {e}")
+                    return False
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"[INFO] Tentativa {attempt + 1}/{max_retries} falhou: {e}, a tentar novamente...")
+                    time.sleep(2)  # Delay maior entre tentativas
+                    continue
+                else:
+                    print(f"[ERRO] requestMission: Erro ao solicitar missão após {max_retries} tentativas: {e}")
+                    return False
+        
+        return False
 
     def recvMissionLink(self):
         """
@@ -352,34 +372,47 @@ class NMS_Agent:
         Returns:
             dict or None: Dicionário com dados da missão validada, ou None se não for missão válida
         """
+        print(f"[DEBUG] recvMissionLink: Aguardando mensagem...")
         lista = self.missionLink.recv()
+        print(f"[DEBUG] recvMissionLink: Mensagem recebida - missionType={lista[2]}, idMission={lista[1]}, idAgent={lista[0]}")
         
         if lista[2] == self.missionLink.taskRequest:
+            print(f"[DEBUG] recvMissionLink: É uma missão (taskRequest), processando...")
             mission_message = lista[3]
             mission_id = lista[1]
             
             # Validar formato da missão
+            print(f"[DEBUG] recvMissionLink: Validando missão {mission_id}...")
+            print(f"[DEBUG] recvMissionLink: Tipo da mensagem: {type(mission_message)}, tamanho: {len(str(mission_message))} bytes")
             is_valid, error_msg = validateMission(mission_message)
+            print(f"[DEBUG] recvMissionLink: Validação resultado: válida={is_valid}, erro={error_msg if not is_valid else 'N/A'}")
             
             if not is_valid:
+                print(f"[DEBUG] recvMissionLink: Missão inválida, enviando resposta 'invalid'")
                 self.missionLink.send(lista[4], self.missionLink.port, None, self.id, mission_id, "invalid")
                 return None
             
             # Parse do JSON da missão
             try:
                 if isinstance(mission_message, str):
+                    print(f"[DEBUG] recvMissionLink: Fazendo parse do JSON (string)")
                     mission_data = json.loads(mission_message)
                 else:
+                    print(f"[DEBUG] recvMissionLink: Mensagem já é dicionário")
                     mission_data = mission_message
-            except json.JSONDecodeError:
+                print(f"[DEBUG] recvMissionLink: Parse bem-sucedido - mission_id={mission_data.get('mission_id', 'N/A')}, rover_id={mission_data.get('rover_id', 'N/A')}, task={mission_data.get('task', 'N/A')}")
+            except json.JSONDecodeError as e:
+                print(f"[DEBUG] recvMissionLink: Erro ao fazer parse do JSON: {e}")
                 self.missionLink.send(lista[4], self.missionLink.port, None, self.id, mission_id, "parse_error")
                 return None
             
             # Armazenar missão validada
             self.tasks[mission_id] = mission_data
+            print(f"[DEBUG] recvMissionLink: Missão {mission_id} armazenada, enviando confirmação...")
             
             # Enviar ACK de confirmação
             self.missionLink.send(lista[4], self.missionLink.port, None, self.id, mission_id, mission_id)
+            print(f"[DEBUG] recvMissionLink: Confirmação enviada para {lista[4]}:{self.missionLink.port}")
             
             # Verificar se já há missão em execução
             if self.mission_executing:
@@ -389,6 +422,11 @@ class NMS_Agent:
                 self.mission_executing = True
                 self.current_mission = mission_data
                 print(f"[INFO] Missão ID: {mission_id} recebida - iniciando execução")
+                
+                # Reiniciar telemetria se estiver parada
+                if not self.telemetry_running:
+                    self.startContinuousTelemetry(self.serverAddress, interval_seconds=self.telemetry_interval)
+                
                 mission_thread = threading.Thread(target=self.executeMission, args=(mission_data, self.serverAddress), daemon=True)
                 mission_thread.start()
             
@@ -422,6 +460,7 @@ class NMS_Agent:
         center_y = (y1 + y2) / 2.0
         
         # Estado inicial: mover para a área da missão
+        # Ficar "a caminho" até entrar nas coordenadas da missão (máximo 1-3 mensagens de telemetria)
         self.updateOperationalStatus("a caminho")
         self.updateVelocity(5.0)  # 5 m/s
         
@@ -437,28 +476,112 @@ class NMS_Agent:
             direction_deg = math.degrees(direction_rad)
             self.updateDirection(direction_deg)
         
-        # Simular movimento para a área da missão
-        steps_to_area = int(distance / 5.0) + 1  # Passos de 5 metros
-        for step in range(steps_to_area):
+        # Função auxiliar para verificar se está dentro da área da missão
+        def is_inside_area(x, y):
+            return x1 <= x <= x2 and y1 <= y <= y2
+        
+        # Verificar se já está dentro da área
+        already_inside = is_inside_area(current_x, current_y)
+        
+        # Ficar "a caminho" até entrar na área (máximo 1-3 mensagens de telemetria)
+        num_telemetry_updates_en_route = random.randint(1, 3)
+        prev_x = current_x
+        prev_y = current_y
+        telemetry_count = 0
+        
+        # Fase "a caminho" - mover até entrar na área ou atingir máximo de mensagens
+        while not already_inside and telemetry_count < num_telemetry_updates_en_route:
             if distance > 0.1:
                 # Mover gradualmente em direção ao centro
-                progress = (step + 1) / steps_to_area
-                new_x = current_x + dx * progress
-                new_y = current_y + dy * progress
+                progress = min(1.0, (telemetry_count + 1) / max(3, num_telemetry_updates_en_route))
+                target_x = current_x + dx * progress
+                target_y = current_y + dy * progress
+                
+                # Mudanças incrementais variadas (2 a 5 valores)
+                step_x = random.choice([-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]) if abs(target_x - prev_x) > 1 else 0
+                step_y = random.choice([-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]) if abs(target_y - prev_y) > 1 else 0
+                
+                new_x = prev_x + step_x
+                new_y = prev_y + step_y
+                
+                # Garantir que não ultrapassa o destino
+                if (dx > 0 and new_x > target_x) or (dx < 0 and new_x < target_x):
+                    new_x = prev_x
+                if (dy > 0 and new_y > target_y) or (dy < 0 and new_y < target_y):
+                    new_y = prev_y
+                
+                # Garantir que entra na área se possível
+                if not is_inside_area(new_x, new_y):
+                    # Ajustar para entrar na área
+                    if new_x < x1:
+                        new_x = min(x1, prev_x + 5)
+                    elif new_x > x2:
+                        new_x = max(x2, prev_x - 5)
+                    if new_y < y1:
+                        new_y = min(y1, prev_y + 5)
+                    elif new_y > y2:
+                        new_y = max(y2, prev_y - 5)
+                    
                 self.updatePosition(new_x, new_y, 0.0)
+                prev_x = new_x
+                prev_y = new_y
+                
+                # Verificar se entrou na área
+                already_inside = is_inside_area(new_x, new_y)
+            
+            telemetry_count += 1
+            
+            # Aguardar intervalo de telemetria (5 segundos) para enviar mensagens
+            if not already_inside and telemetry_count < num_telemetry_updates_en_route:
+                time.sleep(5.0)  # Intervalo de telemetria
+        
+        # Se ainda não está dentro, continuar movimento até entrar
+        while not already_inside:
+            if distance > 0.1:
+                # Mover diretamente para dentro da área
+                # Calcular ponto dentro da área mais próximo
+                target_x = max(x1, min(x2, prev_x + (center_x - prev_x) * 0.3))
+                target_y = max(y1, min(y2, prev_y + (center_y - prev_y) * 0.3))
+                
+                step_x = random.choice([-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]) if abs(target_x - prev_x) > 1 else 0
+                step_y = random.choice([-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]) if abs(target_y - prev_y) > 1 else 0
+                
+                new_x = prev_x + step_x
+                new_y = prev_y + step_y
+                
+                # Garantir que entra na área
+                if new_x < x1:
+                    new_x = x1 + random.randint(0, 5)
+                elif new_x > x2:
+                    new_x = x2 - random.randint(0, 5)
+                if new_y < y1:
+                    new_y = y1 + random.randint(0, 5)
+                elif new_y > y2:
+                    new_y = y2 - random.randint(0, 5)
+                
+                # Garantir que está dentro
+                new_x = max(x1, min(x2, new_x))
+                new_y = max(y1, min(y2, new_y))
+                
+                self.updatePosition(new_x, new_y, 0.0)
+                prev_x = new_x
+                prev_y = new_y
+                
+                # Verificar se entrou na área
+                already_inside = is_inside_area(new_x, new_y)
+            
             time.sleep(0.5)  # Pequeno delay para simular movimento
         
-        # Chegou à área da missão - iniciar execução
+        # Mudar para "em missão" apenas quando já está dentro das coordenadas
         self.updateOperationalStatus("em missão")
         self.updateVelocity(2.0)  # Velocidade reduzida durante execução
         
-        # Calcular número de atualizações durante a missão (usar intervalo fixo de 30s)
-        total_duration_seconds = duration_minutes * 60
-        update_interval_seconds = 30  # Intervalo fixo de 30 segundos (mesmo da telemetria contínua)
-        num_updates = max(1, int(total_duration_seconds / update_interval_seconds))
+        # Calcular duração total em segundos
+        total_duration_seconds = float(duration_minutes) * 60.0
+        update_interval_seconds = 5  # Intervalo fixo de 5 segundos (mesmo da telemetria contínua)
         
         # Executar missão com atualizações periódicas de posição e estado
-        # A telemetria contínua (30s) continua a correr em paralelo
+        # A telemetria contínua (5s) continua a correr em paralelo
         start_time = time.time()
         
         # Padrão de movimento dentro da área (exploração em grid)
@@ -467,43 +590,112 @@ class NMS_Agent:
         step_size_x = (x2 - x1) / grid_steps_x
         step_size_y = (y2 - y1) / grid_steps_y
         
-        for update_idx in range(num_updates):
+        # Valores anteriores para mudanças incrementais pequenas
+        prev_x = self.position["x"]
+        prev_y = self.position["y"]
+        prev_battery = self.battery
+        prev_temperature = self.temperature
+        
+        # Loop baseado em tempo real, não em número de iterações
+        update_idx = 0
+        while True:
             elapsed_time = time.time() - start_time
+            
+            # Verificar se a missão já terminou
+            if elapsed_time >= total_duration_seconds:
+                break
+            
             progress_percent = min(100, int((elapsed_time / total_duration_seconds) * 100))
             
             # Calcular posição atual na área (movimento em grid)
             grid_x = (update_idx % grid_steps_x)
             grid_y = (update_idx // grid_steps_x) % grid_steps_y
             
-            mission_x = x1 + grid_x * step_size_x
-            mission_y = y1 + grid_y * step_size_y
+            target_x = x1 + grid_x * step_size_x
+            target_y = y1 + grid_y * step_size_y
             
             # Garantir que está dentro dos limites
-            mission_x = max(x1, min(x2, mission_x))
-            mission_y = max(y1, min(y2, mission_y))
+            target_x = max(x1, min(x2, target_x))
+            target_y = max(y1, min(y2, target_y))
             
-            # Atualizar posição
-            self.updatePosition(mission_x, mission_y, 0.0)
+            # Atualizar posição com mudanças variadas (2 a 5 valores)
+            if abs(target_x - prev_x) > 0.1:
+                step_x = random.choice([-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5])  # Mudança variada
+                new_x = prev_x + step_x
+                new_x = max(x1, min(x2, new_x))  # Garantir dentro dos limites
+            else:
+                new_x = prev_x
+                
+            if abs(target_y - prev_y) > 0.1:
+                step_y = random.choice([-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5])  # Mudança variada
+                new_y = prev_y + step_y
+                new_y = max(y1, min(y2, new_y))  # Garantir dentro dos limites
+            else:
+                new_y = prev_y
             
-            # Atualizar bateria (diminui gradualmente)
-            battery_level = max(20.0, 100.0 - (elapsed_time / total_duration_seconds) * 30.0)
-            self.updateBattery(battery_level)
+            self.updatePosition(new_x, new_y, 0.0)
+            prev_x = new_x
+            prev_y = new_y
             
-            # Atualizar temperatura (aumenta ligeiramente durante operação)
-            temperature = 20.0 + (elapsed_time / total_duration_seconds) * 15.0
-            self.updateTemperature(temperature)
+            # Atualizar bateria com mudanças muito pequenas (0% ou 0.2%)
+            battery_change = random.choice([0.0, -0.2])  # Diminui muito lentamente
+            new_battery = max(20.0, prev_battery + battery_change)
+            self.updateBattery(new_battery)
+            prev_battery = new_battery
             
-            # NÃO enviar telemetria aqui - a telemetria contínua (30s) já faz isso
+            # Atualizar temperatura com mudanças pequenas (0.1°C ou 0.2°C)
+            temp_change = random.choice([0.0, 0.1, 0.2])  # Aumenta muito lentamente
+            new_temperature = min(35.0, prev_temperature + temp_change)
+            self.updateTemperature(new_temperature)
+            prev_temperature = new_temperature
             
-            # Aguardar até próxima atualização (intervalo fixo de 30s)
-            if update_idx < num_updates - 1:
-                time.sleep(update_interval_seconds)
+            # NÃO enviar telemetria aqui - a telemetria contínua (5s) já faz isso
+            
+            # Incrementar índice para cálculo de grid
+            update_idx += 1
+            
+            # Calcular quanto tempo falta até a próxima atualização
+            next_update_time = start_time + (update_idx * update_interval_seconds)
+            sleep_time = max(0.1, next_update_time - time.time())
+            
+            # Aguardar até próxima atualização (intervalo fixo de 5s)
+            if sleep_time > 0:
+                time.sleep(min(sleep_time, update_interval_seconds))
         
-        # Missão concluída
+        # Enviar telemetria final antes de concluir missão
+        self.createAndSendTelemetry(server_ip)
+        
+        # Reportar progresso de conclusão da missão ao servidor (com retry)
+        # Pequeno delay antes de reportar para evitar conflitos com outras operações
+        time.sleep(0.5)
+        max_retries = 3
+        progress_reported = False
+        for retry in range(max_retries):
+            try:
+                progress_data = {
+                    "mission_id": mission_id,
+                    "status": "completed",
+                    "progress_percent": 100,
+                    "current_position": {
+                        "x": self.position["x"],
+                        "y": self.position["y"],
+                        "z": self.position["z"]
+                    }
+                }
+                progress_json = json.dumps(progress_data)
+                self.missionLink.send(server_ip, self.missionLink.port, self.missionLink.reportProgress, self.id, mission_id, progress_json)
+                progress_reported = True
+                break
+            except Exception as e:
+                if retry < max_retries - 1:
+                    print(f"[INFO] Tentativa {retry + 1}/{max_retries} de reportar conclusão falhou, a tentar novamente...")
+                    time.sleep(2)  # Delay maior entre tentativas
+                else:
+                    print(f"[ERRO] Erro ao reportar conclusão da missão após {max_retries} tentativas: {e}")
+        
+        # Atualizar estado para "parado"
         self.updateOperationalStatus("parado")
         self.updateVelocity(0.0)
-        
-        # A telemetria contínua (30s) irá mostrar o estado "parado" automaticamente
         
         print(f"[OK] Missão {mission_id} concluída")
         
@@ -524,6 +716,22 @@ class NMS_Agent:
                 print(f"[INFO] Iniciando próxima missão da fila: {next_mission.get('mission_id')}")
                 next_thread = threading.Thread(target=self.executeMission, args=(next_mission, server_ip), daemon=True)
                 next_thread.start()
+            else:
+                # Não há mais missões na fila local - solicitar próxima missão à Nave-Mãe
+                # A telemetria contínua continua rodando indefinidamente (não deve ser parada)
+                
+                print(f"[INFO] Missão concluída - solicitando próxima missão à Nave-Mãe")
+                try:
+                    # Enviar pedido de missão - a resposta virá através do recvMissionLink()
+                    request_sent = self.requestMission(server_ip)
+                    if request_sent:
+                        print(f"[INFO] Pedido de missão enviado - aguardando resposta da Nave-Mãe")
+                        # A missão será recebida pelo recvMissionLink() e iniciada automaticamente
+                    else:
+                        # Não foi possível enviar o pedido
+                        print(f"[INFO] Não foi possível solicitar próxima missão")
+                except Exception as e:
+                    print(f"[ERRO] Erro ao solicitar próxima missão: {e}")
 
     def sendTelemetry(self,ip,message):
         """
@@ -585,7 +793,7 @@ class NMS_Agent:
         # Adicionar campos opcionais
         telemetry["battery"] = self.battery
         telemetry["velocity"] = self.velocity
-        telemetry["direction"] = self.direction
+        telemetry["direction"] = degreesToCardinalDirection(self.direction)
         telemetry["temperature"] = self.temperature
         telemetry["system_health"] = self.system_health
         
@@ -735,7 +943,7 @@ class NMS_Agent:
         # Normalizar para 0-360
         self.direction = float(direction) % 360.0
     
-    def startContinuousTelemetry(self, server_ip, interval_seconds=30):
+    def startContinuousTelemetry(self, server_ip, interval_seconds=5):
         """
         Inicia monitorização contínua de telemetria.
         Envia telemetria periodicamente em thread separada.

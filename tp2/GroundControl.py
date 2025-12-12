@@ -353,7 +353,11 @@ class GroundControl:
         
         direction = entry.get('direction')
         if direction is not None:
-            print(f"{indent}Direção:              {direction:.1f}°")
+            # Direção pode ser string (ponto cardeal) ou float (graus)
+            if isinstance(direction, str):
+                print(f"{indent}Direção:              {direction}")
+            else:
+                print(f"{indent}Direção:              {direction:.1f}°")
         
         temperature = entry.get('temperature')
         if temperature is not None:
@@ -421,7 +425,11 @@ class GroundControl:
         num_entries = len(telemetry)
         print(f"Mostrando {num_entries} registo(s) de telemetria:")
         
-        for i, entry in enumerate(telemetry, 1):
+        # Inverter ordem para mostrar mais recente primeiro (Registo 1 = mais recente, Registo N = mais antigo)
+        # A API retorna ordenado do mais recente para o mais antigo, mas vamos inverter para garantir ordem correta
+        telemetry_reversed = list(reversed(telemetry))
+        
+        for i, entry in enumerate(telemetry_reversed, 1):
             print(f"\n--- Registo {i} ---")
             self._print_telemetry_entry(entry)
         
