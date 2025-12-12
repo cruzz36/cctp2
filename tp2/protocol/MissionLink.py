@@ -1154,6 +1154,10 @@ class MissionLink:
             adaptive_timeout = self._get_adaptive_timeout(connection_key)
             last_packet_time = time.time()
             
+            # Contador de retransmissões consecutivas para evitar loops infinitos
+            consecutive_retransmissions = 0
+            max_consecutive_retransmissions = 20  # Limite máximo antes de desistir
+            
             while True:
                 try:
                     # Limpar buffer de reordenação periodicamente
@@ -1368,17 +1372,32 @@ class MissionLink:
                 # or the message do not correspond to the expected sequence
                 # So, to make sure, we sent the previous message that was supposed to be sent
                 except socket.timeout:
-                    # Reenviar último ACK para solicitar retransmissão
+                    consecutive_retransmissions += 1
                     adaptive_timeout_used = self._get_adaptive_timeout(connection_key) if 'connection_key' in locals() else self.limit.timeout
                     print(f"[PACKET LOSS] Timeout ao aguardar próximo chunk de {ip}:{port} (chunk {chunk_count+1}, timeout usado: {adaptive_timeout_used:.3f}s)")
                     print(f"[DEBUG] recv: Timeout - último seq recebido={seq}, último ack enviado={ack}, esperado seq={seq+1}")
-                    print(f"[RETRANSMISSÃO] Reenviando último ACK para solicitar retransmissão para {ip}:{port}")
+                    
+                    # Verificar se excedemos limite de retransmissões consecutivas
+                    if consecutive_retransmissions >= max_consecutive_retransmissions:
+                        print(f"[ERRO] Limite de retransmissões consecutivas atingido ({consecutive_retransmissions}/{max_consecutive_retransmissions})")
+                        print(f"[ERRO] Conexão provavelmente perdida - abortando receção de chunks de {ip}:{port}")
+                        raise TimeoutError(f"Limite de retransmissões consecutivas atingido ao aguardar chunks de {ip}:{port}. Conexão pode ter sido perdida.")
+                    
+                    print(f"[RETRANSMISSÃO] Reenviando último ACK para solicitar retransmissão para {ip}:{port} (tentativa {consecutive_retransmissions}/{max_consecutive_retransmissions})")
                     self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                     continue
+                except (ConnectionResetError, TimeoutError) as e:
+                    # Erros críticos que indicam perda de conexão - propagar para cima
+                    print(f"[ERRO] Erro crítico ao receber chunks: {e}")
+                    raise
                 except Exception as e:
                     print(f"Erro ao receber chunk: {e}")
-                    # Reenviar último ACK
-                    print(f"[RETRANSMISSÃO] Reenviando último ACK após erro para {ip}:{port}")
+                    # Reenviar último ACK apenas para erros não críticos
+                    consecutive_retransmissions += 1
+                    if consecutive_retransmissions >= max_consecutive_retransmissions:
+                        print(f"[ERRO] Limite de retransmissões consecutivas atingido após erro ({consecutive_retransmissions}/{max_consecutive_retransmissions})")
+                        raise TimeoutError(f"Limite de retransmissões consecutivas atingido após erro ao receber chunks de {ip}:{port}")
+                    print(f"[RETRANSMISSÃO] Reenviando último ACK após erro para {ip}:{port} (tentativa {consecutive_retransmissions}/{max_consecutive_retransmissions})")
                     self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                     continue
 

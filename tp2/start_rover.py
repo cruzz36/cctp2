@@ -68,10 +68,13 @@ def main():
             while True:
                 try:
                     rover.recvMissionLink()
-                except TimeoutError:
-                    # Timeout normal - continuar a escutar
+                except (TimeoutError, ConnectionResetError) as e:
+                    # Timeout ou reset de conexão - continuar a escutar após breve delay
+                    print(f"[AVISO] Conexão perdida ou resetada durante receção: {e}")
+                    time.sleep(1)  # Pequeno delay antes de tentar novamente
                     continue
-                except Exception:
+                except Exception as e:
+                    print(f"[ERRO] Erro inesperado ao receber missão: {e}")
                     time.sleep(2)
         
         ml_thread = threading.Thread(target=mission_listener, daemon=True)
