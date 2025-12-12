@@ -698,14 +698,24 @@ class MissionLink:
         if message.endswith(".json"):
             # First cycle is to send the filename
             print(f"[DEBUG] send: Enviando ficheiro: {message}")
-            while True:
+            filename_retries = 0
+            max_filename_retries = 20  # Limite máximo de retransmissões antes de desistir
+            while filename_retries < max_filename_retries:
                 print(f"[DEBUG] send: Enviando nome do ficheiro (seq={seq})")
                 self.sock.sendto(self.formatMessage(missionType,self.datakey,idMission,seq,ack,message),(ip,port))
                 try:
                     text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
                     lista = text.decode().split("|")
+                    # Reset contador quando recebe qualquer pacote válido
+                    if len(lista) == 7 and responseIp == ip and responsePort == port:
+                        filename_retries = 0
+                    
                     # Validar formato da mensagem
                     if len(lista) < 7:
+                        filename_retries += 1
+                        if filename_retries >= max_filename_retries:
+                            print(f"[ERRO] Limite de retransmissões nome do ficheiro atingido ({filename_retries}/{max_filename_retries})")
+                            raise TimeoutError(f"Limite de retransmissões atingido ao enviar nome do ficheiro para {ip}:{port}")
                         # Mensagem malformada - retransmitir nome do ficheiro
                         continue
                     if(
@@ -720,13 +730,28 @@ class MissionLink:
                         print(f"[DEBUG] send: Nome do ficheiro confirmado (ACK recebido, seq={seq})")
                         break
                 except socket.timeout:
+                    filename_retries += 1
                     # Timeout ao aguardar ACK - retransmitir nome do ficheiro
-                    print(f"[PACKET LOSS] Timeout ao aguardar ACK do nome do ficheiro de {ip}:{port}")
+                    print(f"[PACKET LOSS] Timeout ao aguardar ACK do nome do ficheiro de {ip}:{port} (tentativa {filename_retries}/{max_filename_retries})")
+                    
+                    if filename_retries >= max_filename_retries:
+                        print(f"[ERRO] Limite de retransmissões nome do ficheiro atingido ({filename_retries}/{max_filename_retries})")
+                        raise TimeoutError(f"Limite de retransmissões atingido ao enviar nome do ficheiro para {ip}:{port}")
+                    
                     print(f"[RETRANSMISSÃO] Reenviando nome do ficheiro para {ip}:{port}")
                     continue
                 except Exception as e:
-                    print(f"Erro ao aguardar ACK do nome do ficheiro: {e}")
+                    filename_retries += 1
+                    print(f"Erro ao aguardar ACK do nome do ficheiro: {e} (tentativa {filename_retries}/{max_filename_retries})")
+                    
+                    if filename_retries >= max_filename_retries:
+                        print(f"[ERRO] Limite de retransmissões nome do ficheiro atingido após erro ({filename_retries}/{max_filename_retries})")
+                        raise TimeoutError(f"Limite de retransmissões atingido após erro ao enviar nome do ficheiro para {ip}:{port}")
                     continue
+            
+            # Se chegou aqui, excedeu limite de retransmissões
+            print(f"[ERRO] Limite de retransmissões nome do ficheiro atingido ({max_filename_retries})")
+            raise TimeoutError(f"Limite de retransmissões atingido ao enviar nome do ficheiro para {ip}:{port}")
 
             with open(message,"r") as file:
                 buffer = file.read(self.limit.buffersize-self.getHeaderSize())
@@ -763,10 +788,16 @@ class MissionLink:
             seq += 1
             ack = seq
             self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
-            while True:
+            fin_retries_file = 0
+            max_fin_retries_file = 20  # Limite máximo de retransmissões antes de desistir
+            while fin_retries_file < max_fin_retries_file:
                 try:
                     text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
                     lista = text.decode().split("|")
+                    # Reset contador quando recebe qualquer pacote válido
+                    if len(lista) == 7 and responseIp == ip and responsePort == port:
+                        fin_retries_file = 0
+                    
                     # Validação do pacote FIN recebido
                     if(
                         len(lista) == 7 and
@@ -782,10 +813,33 @@ class MissionLink:
                         self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                         return True
                 except socket.timeout:
-                    print(f"[PACKET LOSS] Timeout ao aguardar FIN-ACK de {ip}:{port} (ficheiro)")
+                    fin_retries_file += 1
+                    print(f"[PACKET LOSS] Timeout ao aguardar FIN-ACK de {ip}:{port} (ficheiro) (tentativa {fin_retries_file}/{max_fin_retries_file})")
+                    
+                    if fin_retries_file >= max_fin_retries_file:
+                        print(f"[ERRO] Limite de retransmissões FIN atingido ({fin_retries_file}/{max_fin_retries_file})")
+                        print(f"[ERRO] Conexão provavelmente perdida - considerando conexão fechada")
+                        return True
+                    
                     print(f"[RETRANSMISSÃO] Reenviando FIN para {ip}:{port}")
                     self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
+                    continue
+                except Exception as e:
+                    fin_retries_file += 1
+                    print(f"[ERRO] Erro ao aguardar FIN-ACK: {e} (tentativa {fin_retries_file}/{max_fin_retries_file})")
                     
+                    if fin_retries_file >= max_fin_retries_file:
+                        print(f"[ERRO] Limite de retransmissões FIN atingido após erro ({fin_retries_file}/{max_fin_retries_file})")
+                        print(f"[ERRO] Conexão provavelmente perdida - considerando conexão fechada")
+                        return True
+                    
+                    print(f"[RETRANSMISSÃO] Reenviando FIN para {ip}:{port}")
+                    self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
+                    continue
+            
+            # Se chegou aqui, excedeu limite de retransmissões
+            print(f"[ERRO] Limite de retransmissões FIN atingido ({max_fin_retries_file}) - considerando conexão fechada")
+            return True
 
         else:
             chunks = self.splitMessage(message)
@@ -836,14 +890,24 @@ class MissionLink:
                             print(f"[DEBUG] send: FIN enviado (seq={seq}), aguardando FIN-ACK")
                             # Fechamento bidirecional completo (4-way handshake)
                             # Aguarda ACK do FIN enviado OU FIN do outro lado
-                            while True:
+                            fin_retries = 0
+                            max_fin_retries = 20  # Limite máximo de retransmissões antes de desistir
+                            while fin_retries < max_fin_retries:
                                 try:
                                     # Usar lock para evitar que acceptConnection() consuma pacotes
                                     with self.sock_lock:
                                         text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
                                     lista = text.decode().split("|")
+                                    # Reset contador quando recebe qualquer pacote válido
+                                    if len(lista) == 7 and responseIp == ip and responsePort == port:
+                                        fin_retries = 0
+                                    
                                     # Validar formato da mensagem
                                     if len(lista) < 7:
+                                        fin_retries += 1
+                                        if fin_retries >= max_fin_retries:
+                                            print(f"[ERRO] Limite de retransmissões FIN atingido após mensagem malformada ({fin_retries}/{max_fin_retries})")
+                                            return True
                                         # Mensagem malformada - reenviar FIN
                                         self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                                         continue
@@ -901,16 +965,36 @@ class MissionLink:
                                             # Continuar loop para aguardar FIN
                                             continue
                                 except socket.timeout:
+                                    fin_retries += 1
                                     # Reenvia FIN se timeout (pode ser que o outro lado ainda não recebeu)
-                                    print(f"[PACKET LOSS] Timeout ao aguardar FIN/ACK de {ip}:{port}")
+                                    print(f"[PACKET LOSS] Timeout ao aguardar FIN/ACK de {ip}:{port} (tentativa {fin_retries}/{max_fin_retries})")
+                                    
+                                    # Verificar se excedemos limite de retransmissões
+                                    if fin_retries >= max_fin_retries:
+                                        print(f"[ERRO] Limite de retransmissões FIN atingido ({fin_retries}/{max_fin_retries})")
+                                        print(f"[ERRO] Conexão provavelmente perdida - considerando conexão fechada")
+                                        return True  # Considerar conexão fechada após muitas tentativas
+                                    
                                     print(f"[RETRANSMISSÃO] Reenviando FIN para {ip}:{port}")
                                     self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                                     continue
                                 except Exception as e:
-                                    print(f"Erro ao aguardar resposta FIN: {e}")
+                                    fin_retries += 1
+                                    print(f"Erro ao aguardar resposta FIN: {e} (tentativa {fin_retries}/{max_fin_retries})")
+                                    
+                                    # Verificar se excedemos limite de retransmissões
+                                    if fin_retries >= max_fin_retries:
+                                        print(f"[ERRO] Limite de retransmissões FIN atingido após erro ({fin_retries}/{max_fin_retries})")
+                                        print(f"[ERRO] Conexão provavelmente perdida - considerando conexão fechada")
+                                        return True  # Considerar conexão fechada após muitas tentativas
+                                    
                                     # Reenviar FIN
                                     self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                                     continue
+                            
+                            # Se chegou aqui, excedeu limite de retransmissões
+                            print(f"[ERRO] Limite de retransmissões FIN atingido ({max_fin_retries}) - considerando conexão fechada")
+                            return True
                         continue
                     except socket.timeout:
                         # Restaurar timeout original antes de continuar
@@ -990,12 +1074,22 @@ class MissionLink:
                     self.sock.sendto(self.formatMessage(missionType,self.datakey,idMission,seq,ack,chunks[i]),(ip,port))
                     continue
             self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
-            while True:
+            fin_retries_long = 0
+            max_fin_retries_long = 20  # Limite máximo de retransmissões antes de desistir
+            while fin_retries_long < max_fin_retries_long:
                 try:
                     text,(responseIp,responsePort) = self.sock.recvfrom(self.limit.buffersize)
                     lista = text.decode().split("|")
+                    # Reset contador quando recebe qualquer pacote válido
+                    if len(lista) == 7 and responseIp == ip and responsePort == port:
+                        fin_retries_long = 0
+                    
                     # Validar formato da mensagem
                     if len(lista) < 7:
+                        fin_retries_long += 1
+                        if fin_retries_long >= max_fin_retries_long:
+                            print(f"[ERRO] Limite de retransmissões FIN atingido após mensagem malformada ({fin_retries_long}/{max_fin_retries_long})")
+                            return True
                         # Mensagem malformada - reenviar FIN
                         self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                         continue
@@ -1014,10 +1108,35 @@ class MissionLink:
                 #          durante a troca de FIN não serão tratados, causando exceções não tratadas
                 #          e falhas de conexão em vez de retransmitir o pacote FIN
                 except socket.timeout:
-                    print(f"[PACKET LOSS] Timeout ao aguardar FIN-ACK de {ip}:{port} (mensagem longa)")
+                    fin_retries_long += 1
+                    print(f"[PACKET LOSS] Timeout ao aguardar FIN-ACK de {ip}:{port} (mensagem longa) (tentativa {fin_retries_long}/{max_fin_retries_long})")
+                    
+                    # Verificar se excedemos limite de retransmissões
+                    if fin_retries_long >= max_fin_retries_long:
+                        print(f"[ERRO] Limite de retransmissões FIN atingido ({fin_retries_long}/{max_fin_retries_long})")
+                        print(f"[ERRO] Conexão provavelmente perdida - considerando conexão fechada")
+                        return True
+                    
                     print(f"[RETRANSMISSÃO] Reenviando FIN para {ip}:{port}")
                     self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
+                    continue
+                except Exception as e:
+                    fin_retries_long += 1
+                    print(f"[ERRO] Erro ao aguardar FIN-ACK: {e} (tentativa {fin_retries_long}/{max_fin_retries_long})")
                     
+                    # Verificar se excedemos limite de retransmissões
+                    if fin_retries_long >= max_fin_retries_long:
+                        print(f"[ERRO] Limite de retransmissões FIN atingido após erro ({fin_retries_long}/{max_fin_retries_long})")
+                        print(f"[ERRO] Conexão provavelmente perdida - considerando conexão fechada")
+                        return True
+                    
+                    print(f"[RETRANSMISSÃO] Reenviando FIN para {ip}:{port}")
+                    self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
+                    continue
+            
+            # Se chegou aqui, excedeu limite de retransmissões
+            print(f"[ERRO] Limite de retransmissões FIN atingido ({max_fin_retries_long}) - considerando conexão fechada")
+            return True
                 
 
 
@@ -1417,9 +1536,17 @@ class MissionLink:
                         lista = text.decode().split("|")
                         # Validar formato da mensagem
                         if len(lista) < 7:
+                            file_chunk_retries += 1
+                            if file_chunk_retries >= max_file_chunk_retries:
+                                print(f"[ERRO] Limite de retransmissões de chunks de ficheiro atingido após mensagem malformada ({file_chunk_retries}/{max_file_chunk_retries})")
+                                raise TimeoutError(f"Limite de retransmissões consecutivas atingido após mensagem malformada ao receber ficheiro de {ip}:{port}")
                             # Mensagem malformada - reenviar ACK e continuar
                             self.sock.sendto(self.formatMessage(None,self.ackkey,idMission,seq,ack,self.eofkey),(ip,port))
                             continue
+                        # Reset contador quando recebe qualquer pacote válido
+                        if len(lista) == 7 and ip == ipDest and port == portDest:
+                            file_chunk_retries = 0
+                        
                         if(
                             len(lista) == 7 and
                             lista[idMissionPos] == idMission and
@@ -1441,10 +1568,16 @@ class MissionLink:
                                     file.write(lista[messagePos])
                                 # Ficheiro será fechado automaticamente pelo with
                                 self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
-                                while True:
+                                fin_ack_retries_file = 0
+                                max_fin_ack_retries_file = 20  # Limite máximo de retransmissões antes de desistir
+                                while fin_ack_retries_file < max_fin_ack_retries_file:
                                     try:
                                         text,(ip,port) = self.sock.recvfrom(self.limit.buffersize)
                                         lista = text.decode().split("|")
+                                        # Reset contador quando recebe qualquer pacote válido
+                                        if len(lista) == 7 and ip == ipDest and port == portDest:
+                                            fin_ack_retries_file = 0
+                                        
                                         # Validação do pacote FIN recebido
                                         # Bug fix: Deve verificar lista[ackPos] == str(seq) para validar que o FIN recebido
                                         #          está a reconhecer o nosso número de sequência FIN (consistente com linha 701 e 419)
@@ -1459,17 +1592,35 @@ class MissionLink:
                                             # Ficheiro recebido e conexão fechada
                                             return [idAgent,idMission,missionType,fileName,ip]
                                     except socket.timeout:
+                                        fin_ack_retries_file += 1
                                         # Reenviar FIN se timeout
-                                        print(f"[PACKET LOSS] Timeout ao aguardar confirmação FIN de {ip}:{port} (ficheiro)")
+                                        print(f"[PACKET LOSS] Timeout ao aguardar confirmação FIN de {ip}:{port} (ficheiro) (tentativa {fin_ack_retries_file}/{max_fin_ack_retries_file})")
+                                        
+                                        if fin_ack_retries_file >= max_fin_ack_retries_file:
+                                            print(f"[ERRO] Limite de retransmissões FIN atingido ({fin_ack_retries_file}/{max_fin_ack_retries_file})")
+                                            print(f"[ERRO] Conexão provavelmente perdida - considerando ficheiro recebido")
+                                            return [idAgent,idMission,missionType,fileName,ip]
+                                        
                                         print(f"[RETRANSMISSÃO] Reenviando FIN para {ip}:{port}")
                                         self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                                         continue
                                     except Exception as e:
-                                        print(f"Erro ao aguardar confirmação FIN: {e}")
+                                        fin_ack_retries_file += 1
+                                        print(f"Erro ao aguardar confirmação FIN: {e} (tentativa {fin_ack_retries_file}/{max_fin_ack_retries_file})")
+                                        
+                                        if fin_ack_retries_file >= max_fin_ack_retries_file:
+                                            print(f"[ERRO] Limite de retransmissões FIN atingido após erro ({fin_ack_retries_file}/{max_fin_ack_retries_file})")
+                                            print(f"[ERRO] Conexão provavelmente perdida - considerando ficheiro recebido")
+                                            return [idAgent,idMission,missionType,fileName,ip]
+                                        
                                         # Reenviar FIN
                                         print(f"[RETRANSMISSÃO] Reenviando FIN após erro para {ip}:{port}")
                                         self.sock.sendto(self.formatMessage(None,self.finkey,idMission,seq,ack,self.eofkey),(ip,port))
                                         continue
+                                
+                                # Se chegou aqui, excedeu limite de retransmissões
+                                print(f"[ERRO] Limite de retransmissões FIN atingido ({max_fin_ack_retries_file}) - considerando ficheiro recebido")
+                                return [idAgent,idMission,missionType,fileName,ip]
                             else:
                                 # Atualizar previous para o próximo chunk (estratégia anti-duplicação)
                                 previous = lista[messagePos]
